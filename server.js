@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadDotEnv, read, write, isAllowedKey, settings, DEFAULT_BOARDS } from "./lib/store.js";
 import { analyze } from "./lib/ats.js";
-import { findAiTells, findSkills, norm } from "./lib/text.js";
+import { findAiTells, findSkills, norm, AI_TELLS } from "./lib/text.js";
 import { searchJobs, verifyPosting, SOURCE_INFO, classifyType, flagsFor } from "./lib/jobs.js";
 import { parseUpload, resumeToDocx, coverLetterToDocx, resumeToText } from "./lib/files.js";
 import { tasks } from "./lib/ai.js";
@@ -268,6 +268,7 @@ route("GET", /^\/api\/status$/, () => {
     resumes: (r.items || []).length,
     activeResumeId: r.activeId,
     sources: sourcesStatus(),
+    aiTells: AI_TELLS,
     version: "1.0.0",
   };
 });
