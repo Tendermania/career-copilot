@@ -93,20 +93,17 @@ Done and in this repo:
   `zodOutputFormat`), `web_search_20260209` with `pause_turn` resume for web tasks.
   Thinking is always on for Opus 5.5; depth is set with `output_config.effort`.
 
-Not done yet (do these):
-1. `lib/files.js`: parse uploads (base64 JSON body → text + `{type, hasTables, hasImages,
-   textLength, pages, multiColumn}`), and DOCX export of a structured resume / cover letter.
-2. `server.js`: `node:http` server (no Express), static `public/`, JSON API:
-   `GET/PUT /api/state/:key` (keys allowed in store), `GET /api/status`, `POST /api/parse`,
-   `POST /api/ats`, `POST /api/ai/:task`, `POST /api/jobs/search`, `POST /api/jobs/verify`,
-   `POST /api/export/docx`, `GET /api/sources`. Never return API keys to the client (mask them).
-   Port 5317 by default (`PORT` env). Bind to 127.0.0.1.
-3. `public/` UI: vanilla JS single page (`index.html`, `app.js`, `styles.css`), tabs:
-   Dashboard, Profile, Resumes, Evaluate & Tailor, ATS Check, Jobs, Companies, Networking,
-   Cover Letters, Interview Prep, Tracker, Settings. Clean, calm design; light + dark; works
-   on a laptop and a phone. Loading states for AI calls (they can take 30-90 s).
-4. `README.md`: what it is, setup (`npm install`, `npm start`, open http://localhost:5317),
-   where to get each key, privacy note (data stays in `data/`), cost note.
-5. Test: run the server, hit every endpoint (job search with free sources must return real
-   jobs), exercise the UI. AI endpoints need a key; if none is available, at least verify
-   request construction and error handling.
+Completed in the cloud session (2026-11-01):
+- `lib/files.js`: DOCX (mammoth + layout inspection), PDF (unpdf, column/image detection), TXT
+  parsing; DOCX export of resumes (4 templates) and cover letters; plain-text export.
+- `server.js`: localhost API, masked keys, tailoring format lock (`enforceFormat`), company cache,
+  Motion graphics focus seeded on first run.
+- `public/`: all 12 tabs, light/dark, phone layout, per-change accept/reject tailoring diff.
+- `README.md`: setup, keys, privacy, cost.
+- Fixes: `lib/ai.js` now streams (`messages.stream().finalMessage()`), since the SDK refuses
+  non-streaming requests with `max_tokens` 32000; `lib/jobs.js` reports a source as failed when all
+  of its requests fail.
+- Tested: every endpoint; AI tasks against a local mock of the Messages API (request bodies
+  checked: beta header, `fallbacks`, `output_config`, web search tool, retry without fallbacks).
+  Live job-board search could not run in the cloud sandbox (egress policy blocked the hosts), so
+  run one search locally to confirm.
