@@ -3,6 +3,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
 import { loadDotEnv, read, write, isAllowedKey, settings, DEFAULT_BOARDS } from "./lib/store.js";
 import { analyze } from "./lib/ats.js";
 import { findAiTells, findSkills, norm, AI_TELLS } from "./lib/text.js";
@@ -479,8 +480,33 @@ const server = http.createServer(handle);
 // AI calls can run for minutes; don't let Node cut them off.
 server.requestTimeout = 15 * 60 * 1000;
 server.headersTimeout = 60 * 1000;
+// The portable launcher sets OPEN_BROWSER=1 so a double-click opens the app.
+function openBrowser(url) {
+  if (process.env.OPEN_BROWSER !== "1") return;
+  const [cmd, args] = process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : process.platform === "darwin" ? ["open", [url]] : ["xdg-open", [url]];
+  try {
+    spawn(cmd, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+  } catch {
+    // Opening the browser is a convenience; the URL is printed either way.
+  }
+}
+
+const url = `http://localhost:${PORT}`;
+server.on("error", async (e) => {
+  if (e.code !== "EADDRINUSE") throw e;
+  // Already running (e.g. double-clicked twice)? Just open it.
+  const ours = await fetch(`http://127.0.0.1:${PORT}/api/status`).then((r) => r.ok, () => false);
+  if (ours) {
+    console.log(`Career Copilot is already running at ${url}. Opening it.`);
+    openBrowser(url);
+    process.exit(0);
+  }
+  console.error(`Port ${PORT} is used by another program. Close it, or start with a different PORT (e.g. PORT=5318).`);
+  process.exit(1);
+});
 server.listen(PORT, HOST, () => {
   const s = settings();
-  console.log(`Career Copilot running at http://localhost:${PORT}`);
+  console.log(`Career Copilot running at ${url}`);
   console.log(s.anthropicApiKey ? `Claude: ${s.model}${s.useFallbacks ? " (server-side fallbacks on)" : ""}` : "Claude: no API key yet. Add one in Settings to turn on AI features.");
+  openBrowser(url);
 });
