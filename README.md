@@ -64,7 +64,8 @@ Add keys in **Settings** (or in a `.env` file, see below).
 
 | Key | What it turns on | Where to get it |
 | --- | --- | --- |
-| Anthropic API key | Evaluation, tailoring, resume structuring, cover letters, outreach, referral plans, interview prep, company research, AI web job search | [console.anthropic.com](https://console.anthropic.com/settings/keys) → API keys (add billing credit) |
+| Anthropic API key (Claude) | Evaluation, tailoring, resume structuring, cover letters, outreach, referral plans, interview prep, company research, AI web job search | [console.anthropic.com](https://console.anthropic.com/settings/keys) → API keys (add billing credit) |
+| DeepSeek API key (alternative to Claude) | The same AI features **except** company research and AI web job search (DeepSeek's API has no web search) | [platform.deepseek.com](https://platform.deepseek.com/api_keys) → API keys (top up your balance) |
 | Adzuna app ID + key | Adzuna (large job aggregator) | [developer.adzuna.com](https://developer.adzuna.com/) → register → create an app |
 | RapidAPI key | JSearch: LinkedIn, Indeed, Glassdoor, ZipRecruiter via Google for Jobs | [rapidapi.com](https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch) → subscribe to JSearch (free plan) → copy `X-RapidAPI-Key` |
 | USAJOBS key + email | US federal jobs | [developer.usajobs.gov](https://developer.usajobs.gov/apirequest/) → request an API key (use the same email in Settings) |
@@ -72,8 +73,11 @@ Add keys in **Settings** (or in a `.env` file, see below).
 Optional `.env` in the project folder (values saved in Settings take priority):
 
 ```
+AI_PROVIDER=claude            # or deepseek
 ANTHROPIC_API_KEY=sk-ant-...
 CLAUDE_MODEL=claude-opus-5-5
+DEEPSEEK_API_KEY=sk-...
+DEEPSEEK_MODEL=deepseek-v4-flash
 ADZUNA_APP_ID=...
 ADZUNA_APP_KEY=...
 RAPIDAPI_KEY=...
@@ -81,7 +85,14 @@ USAJOBS_KEY=...
 USAJOBS_EMAIL=you@example.com
 ```
 
-**Model.** The default is `claude-opus-5-5`. You can switch to a cheaper, faster model
+**AI provider.** Pick Claude (default) or DeepSeek in Settings → AI provider. With DeepSeek,
+the app uses its JSON mode, checks every answer against the expected format and asks once for a
+fix if something doesn't match. Company check and the AI web search job source need web search,
+so they only work with Claude. The DeepSeek model defaults to `deepseek-v4-flash`; if DeepSeek
+renames its models, change the name in Settings. Per DeepSeek's privacy policy, what you send
+(resume, job text) is processed and stored on servers in China.
+
+**Model.** The default Claude model is `claude-opus-5-5`. You can switch to a cheaper, faster model
 (for example `claude-sonnet-5-5`) in Settings.
 
 **Server-side fallbacks** are **on by default**. If the model declines a request, Anthropic
@@ -102,13 +113,15 @@ Add studios you'd like to work at; the board name is the last part of their care
 - The server only listens on `127.0.0.1`, so other devices on your network can't reach it.
   It rejects requests from other websites.
 - API keys are never sent back to the browser, only a masked version (`sk-a••••7890`).
-- Text goes to Anthropic only when you press an AI button. Job searches call the job boards
+- Text goes to your chosen AI provider (Anthropic or DeepSeek) only when you press an AI button. Job searches call the job boards
   directly from your computer.
 
 ## Cost
 
 - Everything without AI is free.
-- AI features bill your Anthropic account by tokens; see [anthropic.com/pricing](https://www.anthropic.com/pricing).
+- AI features bill your account with the provider you picked, by tokens; see
+  [anthropic.com/pricing](https://www.anthropic.com/pricing) or DeepSeek's pricing page. DeepSeek is
+  usually much cheaper per token.
   Tailoring and evaluation are the largest calls (whole resume + job + detailed output).
   Short tasks like outreach or the About helper are small.
 - Company research and AI web job search also run web searches, billed per search on top of
@@ -120,7 +133,7 @@ Add studios you'd like to work at; the board name is the last part of their care
 
 ## Troubleshooting
 
-- **"No Anthropic API key yet"**: add it in Settings. Everything else works without it.
+- **"No Claude/DeepSeek API key yet"**: add one in Settings. Everything else works without it.
 - **A job source shows "failed"**: usually temporary (site down or rate-limited). Other sources
   still return results.
 - **Behind a corporate proxy**: Node's `fetch` ignores `HTTPS_PROXY` unless you start with
@@ -138,7 +151,7 @@ lib/files.js     PDF/DOCX/TXT parsing, DOCX export
 lib/ats.js       deterministic ATS analyzer
 lib/text.js      skill vocabulary, keyword matching, AI-tell detector
 lib/jobs.js      job board adapters, type classification, flags, fit, verify
-lib/ai.js        Claude tasks (structured outputs, web search)
+lib/ai.js        AI tasks: Claude (structured outputs, web search) or DeepSeek (JSON mode)
 public/          the UI (index.html, styles.css, app.js); no build step
 ```
 

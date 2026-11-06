@@ -9,7 +9,7 @@ import { analyze } from "./lib/ats.js";
 import { findAiTells, findSkills, norm, AI_TELLS } from "./lib/text.js";
 import { searchJobs, verifyPosting, SOURCE_INFO, classifyType, flagsFor } from "./lib/jobs.js";
 import { parseUpload, resumeToDocx, coverLetterToDocx, resumeToText } from "./lib/files.js";
-import { tasks } from "./lib/ai.js";
+import { tasks, aiStatus, requireAi } from "./lib/ai.js";
 
 loadDotEnv();
 
@@ -19,7 +19,7 @@ const PORT = Number(process.env.PORT) || 5317;
 const HOST = process.env.HOST || "127.0.0.1";
 const MAX_BODY = 25 * 1024 * 1024;
 const COMPANY_TTL = 14 * 86400000;
-const SECRET_KEYS = ["anthropicApiKey", "adzunaAppKey", "rapidApiKey", "usajobsKey"];
+const SECRET_KEYS = ["anthropicApiKey", "deepseekApiKey", "adzunaAppKey", "rapidApiKey", "usajobsKey"];
 
 // ---------- Seed data ----------
 
@@ -73,7 +73,7 @@ function publicSettings() {
 function saveSettings(incoming = {}) {
   const saved = read("settings", {}) || {};
   const next = { ...saved };
-  const allowed = ["anthropicApiKey", "model", "adzunaAppId", "adzunaAppKey", "adzunaCountry", "rapidApiKey", "usajobsKey", "usajobsEmail", "greenhouseBoards", "leverBoards", "ashbyBoards", "useFallbacks"];
+  const allowed = ["aiProvider", "anthropicApiKey", "deepseekApiKey", "deepseekModel", "model", "adzunaAppId", "adzunaAppKey", "adzunaCountry", "rapidApiKey", "usajobsKey", "usajobsEmail", "greenhouseBoards", "leverBoards", "ashbyBoards", "useFallbacks"];
   for (const k of allowed) {
     if (!(k in incoming)) continue;
     let v = incoming[k];
@@ -105,7 +105,7 @@ function sourcesStatus() {
     adzuna: !!(s.adzunaAppId && s.adzunaAppKey),
     jsearch: !!s.rapidApiKey,
     usajobs: !!(s.usajobsKey && s.usajobsEmail),
-    web: !!s.anthropicApiKey,
+    web: aiStatus(s).ready && aiStatus(s).webSearch,
     greenhouse: (s.greenhouseBoards || []).length > 0,
     lever: (s.leverBoards || []).length > 0,
     ashby: (s.ashbyBoards || []).length > 0,
@@ -152,7 +152,7 @@ async function readBody(req) {
 function friendly(e) {
   const status = e.status || 500;
   const name = e.constructor?.name || "";
-  if (e.code === "NO_API_KEY") return { status: 400, error: e.message, code: e.code };
+  if (e.expose || e.code === "NO_API_KEY") return { status: status >= 400 && status < 600 ? status : 500, error: e.message, code: e.code };
   if (name === "AuthenticationError" || status === 401) return { status: 401, error: "Anthropic rejected the API key. Check it in Settings (console.anthropic.com → API keys).", code: "BAD_API_KEY" };
   if (name === "PermissionDeniedError" || status === 403) return { status: 403, error: `Your API key isn't allowed to do this: ${e.message}`, code: "FORBIDDEN" };
   if (name === "NotFoundError" && /model/i.test(e.message)) return { status: 400, error: `Model not available to your key: ${e.message}. Pick another model in Settings.`, code: "BAD_MODEL" };
@@ -264,6 +264,8 @@ route("GET", /^\/api\/status$/, () => {
   return {
     ok: true,
     hasAnthropicKey: !!s.anthropicApiKey,
+    ai: aiStatus(s),
+    aiReady: aiStatus(s).ready,
     model: s.model,
     useFallbacks: s.useFallbacks,
     resumes: (r.items || []).length,
@@ -313,7 +315,7 @@ route("POST", /^\/api\/ai\/(\w+)$/, async (req, m, body) => {
   const name = m[1];
   const fn = tasks[name];
   if (!fn) throw fail(404, `Unknown AI task "${name}".`);
-  if (!settings().anthropicApiKey) throw fail(400, "No Anthropic API key yet. Add one in Settings (console.anthropic.com → API keys). Everything else works without it.", "NO_API_KEY");
+  requireAi();
   const input = { ...body };
   if (!input.profile) input.profile = read("profile", {});
   if (["evaluate", "tailor", "coverLetter", "interviewPrep"].includes(name) && !input.resume) {
@@ -507,6 +509,7 @@ server.on("error", async (e) => {
 server.listen(PORT, HOST, () => {
   const s = settings();
   console.log(`Career Copilot running at ${url}`);
-  console.log(s.anthropicApiKey ? `Claude: ${s.model}${s.useFallbacks ? " (server-side fallbacks on)" : ""}` : "Claude: no API key yet. Add one in Settings to turn on AI features.");
+  const a = aiStatus(s);
+  console.log(a.ready ? `AI: ${a.label}, ${a.model}${a.provider === "claude" && s.useFallbacks ? " (server-side fallbacks on)" : ""}` : `AI: no ${a.label} API key yet. Add one in Settings to turn on AI features.`);
   openBrowser(url);
 });

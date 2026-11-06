@@ -87,7 +87,7 @@ const fileSafe = (s) => String(s || "document").replace(/[^\w.-]+/g, "-").replac
 
 // ================= State =================
 const S = {
-  status: { hasAnthropicKey: false, sources: [], aiTells: [] },
+  status: { aiReady: false, ai: { provider: "claude", label: "Claude", webSearch: true }, sources: [], aiTells: [] },
   profile: null, resumes: { activeId: null, items: [] }, tracker: { items: [] }, savedJobs: { items: [] }, documents: { items: [] }, companies: {}, settings: null,
   ui: { job: ls.get("job", { title: "", company: "", location: "", type: "", salary: "", url: "", description: "" }), resumeId: null, jobsTab: "results", lastSearch: ls.get("lastSearch", null) },
   pending: {}, results: {}, errors: {},
@@ -141,8 +141,9 @@ function loadingHTML(key, p) {
 
 function errorHTML(e) {
   if (e.code === "NO_API_KEY") {
-    return `<div class="notice info"><div class="grow"><b>This needs an Anthropic API key.</b><br>AI features use your own key. Everything else (ATS check, job search, tracker) works without one.</div><a class="btn small primary" href="#/settings">Add key</a></div>`;
+    return `<div class="notice info"><div class="grow"><b>This needs an AI key (${esc(S.status.ai?.label || "Claude")}).</b><br>AI features use your own key, from Claude or DeepSeek. Everything else (ATS check, job search, tracker) works without one.</div><a class="btn small primary" href="#/settings">Add key</a></div>`;
   }
+  if (e.code === "NO_WEB_SEARCH") return `<div class="notice info"><div class="grow">${esc(e.message)}</div><a class="btn small" href="#/settings">Settings</a></div>`;
   if (e.code === "NO_RESUME") return `<div class="notice info"><div class="grow">${esc(e.message)}</div><a class="btn small" href="#/resumes">Go to Resumes</a></div>`;
   if (e.code === "NO_JOB") return `<div class="notice info"><div class="grow">${esc(e.message)}</div></div>`;
   if (e.code === "BAD_API_KEY" || e.code === "NO_CREDIT" || e.code === "BAD_MODEL") return `<div class="notice bad"><div class="grow">${esc(e.message)}</div><a class="btn small" href="#/settings">Settings</a></div>`;
@@ -169,7 +170,7 @@ const refreshSlot = (k) => $$(`[data-slot="${k}"]`).forEach(fillSlot);
 
 async function runAI(key, task, body, { label = "Claude is working…", expect = 60, onDone } = {}) {
   if (S.pending[key]) return;
-  if (!S.status.hasAnthropicKey) {
+  if (!S.status.aiReady) {
     S.errors[key] = Object.assign(new Error("No API key"), { code: "NO_API_KEY" });
     refreshSlot(key);
     return;
@@ -589,10 +590,10 @@ view("dashboard", "Dashboard", (main) => {
   const r = activeResume();
 
   const actions = [];
-  if (!S.status.hasAnthropicKey) actions.push(["Add your Anthropic API key to turn on evaluation, tailoring and writing help.", "#/settings", "Settings"]);
+  if (!S.status.aiReady) actions.push(["Add an AI key (Claude or DeepSeek) to turn on evaluation, tailoring and writing help.", "#/settings", "Settings"]);
   if (!p.name || !p.whoIAm) actions.push(["Tell Career Copilot who you are. It's what makes the writing sound like you.", "#/profile", "Profile"]);
   if (!r) actions.push(["Add your resume (PDF, DOCX or paste).", "#/resumes", "Resumes"]);
-  else if (!r.structured && S.status.hasAnthropicKey) actions.push([`Structure "${r.name}" so tailoring can keep its format.`, "#/resumes", "Resumes"]);
+  else if (!r.structured && S.status.aiReady) actions.push([`Structure "${r.name}" so tailoring can keep its format.`, "#/resumes", "Resumes"]);
   for (const t of due) actions.push([`Follow up with ${t.company} about ${t.role}${t.contacts ? ` (${t.contacts.split("\n")[0]})` : ""}.`, "#/tracker", "Tracker"]);
   const savedNotApplied = S.savedJobs.items.filter((j) => !items.some((t) => t.jobId === j.id && t.status !== "saved")).length;
   if (savedNotApplied) actions.push([`${savedNotApplied} saved job${savedNotApplied > 1 ? "s" : ""} waiting. Evaluate one and apply.`, "#/jobs?tab=saved", "Saved jobs"]);
@@ -601,7 +602,7 @@ view("dashboard", "Dashboard", (main) => {
   for (const t of interviewing.slice(0, 2)) actions.push([`Prep for your ${t.company} interview.`, "#/interview", "Interview prep"]);
 
   main.innerHTML = `${pageHead(p.name ? `Hi ${p.name.split(" ")[0]}` : "Welcome", `Focus: <b>${esc(f.label)}</b> · ${esc((f.roles || []).slice(0, 3).join(", "))}`)}
-  ${!S.status.hasAnthropicKey ? `<div class="notice info" style="margin-bottom:14px"><div class="grow"><b>Running without AI.</b> ATS checks, job search, saving jobs and the tracker all work now. Add an Anthropic key in Settings for evaluation, tailoring, cover letters and outreach.</div><a class="btn small primary" href="#/settings">Add key</a></div>` : ""}
+  ${!S.status.aiReady ? `<div class="notice info" style="margin-bottom:14px"><div class="grow"><b>Running without AI.</b> ATS checks, job search, saving jobs and the tracker all work now. Add a Claude or DeepSeek key in Settings for evaluation, tailoring, cover letters and outreach.</div><a class="btn small primary" href="#/settings">Add key</a></div>` : ""}
   <div class="grid cols-4">
     <div class="card"><div class="stat">${items.filter((t) => ["applied", "interviewing"].includes(t.status)).length}</div><div class="stat-label">Active applications</div></div>
     <div class="card"><div class="stat" style="color:${due.length ? "var(--bad)" : "inherit"}">${due.length}</div><div class="stat-label">Follow-ups due</div></div>
@@ -773,7 +774,7 @@ async function addResumeFromFile(file) {
     await save("resumes", true);
     toast("Resume added");
     rerender();
-    if (S.status.hasAnthropicKey) structureResume(item);
+    if (S.status.aiReady) structureResume(item);
   } catch (e) {
     toast(e.message, "bad");
   }
@@ -832,7 +833,7 @@ view("resumes", "Resumes", (main) => {
     S.ui.resumeSel = item.id;
     await save("resumes", true);
     rerender();
-    if (S.status.hasAnthropicKey) structureResume(item);
+    if (S.status.aiReady) structureResume(item);
   });
   main.addEventListener("change", (e) => {
     if (e.target.name === "activeRes") { S.resumes.activeId = e.target.value; save("resumes"); toast("Active resume set"); rerender(); }
@@ -1035,7 +1036,7 @@ view("evaluate", "Evaluate & Tailor", (main) => {
     const r = pickedResume();
     if (!r) return toast("Add a resume first.", "bad");
     if (!hasJob()) return toast("Paste the job description first.", "bad");
-    if (!S.status.hasAnthropicKey) return runAI("tailor", "tailor", {});
+    if (!S.status.aiReady) return runAI("tailor", "tailor", {});
     if (!r.structured) {
       await runAI("structure", "structureResume", { text: r.text }, { label: "Step 1 of 2: reading your resume's structure…", expect: 40, onDone: (x) => { r.structured = x.data; save("resumes"); } });
       if (!r.structured) return;
@@ -1372,7 +1373,7 @@ view("jobs", "Jobs", (main, params) => {
     </div>
     <details><summary class="small" style="cursor:pointer">Types and sources</summary>
       <div style="margin-top:10px"><label>Job types <span class="hint">none checked = all</span></label>${JOB_TYPES.filter((t) => t !== "Unspecified").map((t) => `<label class="check"><input type="checkbox" name="types" value="${t}" ${f.types.includes(t) ? "checked" : ""}>${t}</label>`).join("")}</div>
-      <div style="margin-top:8px"><label>Sources</label>${(S.status.sources || []).map((s) => `<label class="check" title="${esc(s.note)}"><input type="checkbox" name="sources" value="${s.id}" ${f.sources.includes(s.id) ? "checked" : ""} ${s.active ? "" : "disabled"}>${esc(s.name)}${s.active ? "" : ' <span class="hint">(needs key)</span>'}${s.id === "web" && s.active ? ' <span class="hint">(uses API credit)</span>' : ""}</label>`).join("")}</div>
+      <div style="margin-top:8px"><label>Sources</label>${(S.status.sources || []).map((s) => `<label class="check" title="${esc(s.note)}"><input type="checkbox" name="sources" value="${s.id}" ${f.sources.includes(s.id) ? "checked" : ""} ${s.active ? "" : "disabled"}>${esc(s.name)}${s.active ? "" : ` <span class="hint">(${s.id === "web" ? "needs Claude" : "needs key"})</span>`}${s.id === "web" && s.active ? ' <span class="hint">(uses API credit)</span>' : ""}</label>`).join("")}</div>
     </details>
     <div class="row" style="margin-top:12px"><button class="btn primary" type="submit">Search</button><button class="btn ghost" type="button" id="resetSearch">Reset to focus</button></div>
   </form>
@@ -1441,6 +1442,7 @@ view("companies", "Companies", (main, params) => {
   if (params.get("c")) { S.ui.company = params.get("c"); S.ui.companyRole = params.get("role") || ""; }
   const cached = Object.values(S.companies || {}).sort((a, b) => new Date(b.fetchedAt) - new Date(a.fetchedAt));
   main.innerHTML = `${pageHead("Company check", "Before you apply: ratings from Glassdoor, Indeed and others (with links), how they treat contractors, pay, interview process, recent layoffs or news, and red flags. Claude searches the web; results are cached for 14 days.")}
+  ${S.status.ai?.webSearch === false ? `<div class="notice info" style="margin-bottom:14px"><div class="grow">Company check searches the web, which ${esc(S.status.ai.label)}'s API can't do. Switch the AI provider to Claude in Settings to use it. Earlier results still show below.</div><a class="btn small" href="#/settings">Settings</a></div>` : ""}
   <div class="card"><div class="grid cols-3">
     <div class="field"><label>Company</label><input type="text" id="coName" value="${esc(S.ui.company || "")}" placeholder="e.g. Buck, Duolingo"></div>
     <div class="field"><label>Role <span class="hint">optional</span></label><input type="text" id="coRole" value="${esc(S.ui.companyRole || "")}"></div>
@@ -1796,11 +1798,21 @@ view("settings", "Settings", async (main) => {
   const theme = ls.get("theme", "system");
   main.innerHTML = `${pageHead("Settings", "Keys are stored only in data/settings.json on this computer and never shown back in full.")}
   <form id="setForm" class="stack" autocomplete="off">
-    <div class="card"><h2>Claude (AI features)</h2>
-      ${keyField("anthropicApiKey", "Anthropic API key", "Used for evaluation, tailoring, writing, company research and AI web search. Billed to your Anthropic account.", "https://console.anthropic.com/settings/keys")}
-      <div class="field"><label>Model</label><input type="text" name="model" value="${esc(s.model)}" list="models" style="max-width:320px"><datalist id="models"><option value="claude-opus-5-5"><option value="claude-sonnet-5-5"><option value="claude-haiku-5-5"></datalist><div class="hint">Default claude-opus-5-5 (best writing and judgment). Sonnet is cheaper and faster.</div></div>
-      <label class="check"><input type="checkbox" name="useFallbacks" ${s.useFallbacks ? "checked" : ""}>Server-side fallbacks</label>
-      <div class="hint">On by default. If the model declines a request, Anthropic retries it on a fallback model so you still get an answer. Turn off to only ever use the model above.</div>
+    <div class="card"><h2>AI provider</h2>
+      <p class="small muted">Used for evaluation, tailoring, resume structuring, cover letters, outreach, referral plans and interview prep. Billed to your own account with that provider.</p>
+      <div class="seg" role="radiogroup" aria-label="AI provider" style="margin-bottom:12px">${[["claude", "Claude (Anthropic)"], ["deepseek", "DeepSeek"]].map(([v, l]) => `<label><input type="radio" name="aiProvider" value="${v}" ${(s.aiProvider || "claude") === v ? "checked" : ""}>${l}</label>`).join("")}</div>
+      <div data-prov="claude" ${(s.aiProvider || "claude") === "claude" ? "" : "hidden"}>
+        ${keyField("anthropicApiKey", "Anthropic API key", "", "https://console.anthropic.com/settings/keys")}
+        <div class="field"><label>Model</label><input type="text" name="model" value="${esc(s.model)}" list="models" style="max-width:320px"><datalist id="models"><option value="claude-opus-5-5"><option value="claude-sonnet-5-5"><option value="claude-haiku-5-5"></datalist><div class="hint">Default claude-opus-5-5 (best writing and judgment). Sonnet is cheaper and faster.</div></div>
+        <label class="check"><input type="checkbox" name="useFallbacks" ${s.useFallbacks ? "checked" : ""}>Server-side fallbacks</label>
+        <div class="hint">On by default. If the model declines a request, Anthropic retries it on a fallback model so you still get an answer. Turn off to only ever use the model above.</div>
+        <p class="small muted" style="margin-top:8px">Claude can search the web, so Company check and the AI web job search work with it.</p>
+      </div>
+      <div data-prov="deepseek" ${s.aiProvider === "deepseek" ? "" : "hidden"}>
+        ${keyField("deepseekApiKey", "DeepSeek API key", "", "https://platform.deepseek.com/api_keys")}
+        <div class="field"><label>Model</label><input type="text" name="deepseekModel" value="${esc(s.deepseekModel)}" list="dsmodels" style="max-width:320px"><datalist id="dsmodels"><option value="deepseek-v4-flash"></datalist><div class="hint">Default deepseek-v4-flash. If DeepSeek renames its models, put the new name here.</div></div>
+        <div class="notice info small"><div class="grow">DeepSeek's API has no web search, so <b>Company check</b> and the <b>AI web search</b> job source are off while DeepSeek is selected. Everything else works. Note: per DeepSeek's privacy policy, what you send (your resume, job text) is processed and stored on servers in China.</div></div>
+      </div>
     </div>
     <div class="card"><h2>Job search keys <span class="hint">all optional, all free tiers</span></h2>
       <div class="grid cols-2">
@@ -1823,8 +1835,8 @@ view("settings", "Settings", async (main) => {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(form);
-    const body = { model: fd.get("model"), useFallbacks: !!fd.get("useFallbacks"), adzunaAppId: fd.get("adzunaAppId"), adzunaCountry: fd.get("adzunaCountry"), usajobsEmail: fd.get("usajobsEmail"), greenhouseBoards: fd.get("greenhouseBoards"), leverBoards: fd.get("leverBoards"), ashbyBoards: fd.get("ashbyBoards") };
-    for (const k of ["anthropicApiKey", "adzunaAppKey", "rapidApiKey", "usajobsKey"]) if (fd.get(k)) body[k] = fd.get(k);
+    const body = { aiProvider: fd.get("aiProvider"), model: fd.get("model"), deepseekModel: fd.get("deepseekModel"), useFallbacks: !!fd.get("useFallbacks"), adzunaAppId: fd.get("adzunaAppId"), adzunaCountry: fd.get("adzunaCountry"), usajobsEmail: fd.get("usajobsEmail"), greenhouseBoards: fd.get("greenhouseBoards"), leverBoards: fd.get("leverBoards"), ashbyBoards: fd.get("ashbyBoards") };
+    for (const k of ["anthropicApiKey", "deepseekApiKey", "adzunaAppKey", "rapidApiKey", "usajobsKey"]) if (fd.get(k)) body[k] = fd.get(k);
     try {
       await api("PUT", "/api/state/settings", body);
       await refreshStatus();
@@ -1838,7 +1850,10 @@ view("settings", "Settings", async (main) => {
     if (c && confirm("Remove this key?")) { await api("PUT", "/api/state/settings", { [c.dataset.clear]: "" }); await refreshStatus(); rerender(); }
     if (e.target.id === "resetBoards") { for (const k of ["greenhouse", "lever", "ashby"]) form[`${k}Boards`].value = (s.defaultBoards[k] || []).join("\n"); toast("Defaults filled in. Save to apply."); }
   });
-  main.addEventListener("change", (e) => { if (e.target.name === "theme") { ls.set("theme", e.target.value); applyTheme(); } });
+  main.addEventListener("change", (e) => {
+    if (e.target.name === "theme") { ls.set("theme", e.target.value); applyTheme(); }
+    if (e.target.name === "aiProvider") $$("[data-prov]", main).forEach((el) => (el.hidden = el.dataset.prov !== e.target.value));
+  });
 });
 
 // ================= Boot =================
