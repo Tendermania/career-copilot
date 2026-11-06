@@ -82,9 +82,13 @@ QUICK TEST (no API key needed)
 - Tracker: on a job card click "Track", then move it to Applied.
 
 AI FEATURES (optional)
-Evaluate, tailor, cover letters, outreach, company research and interview prep need an
-Anthropic API key: console.anthropic.com -> API keys (add billing credit first).
-Paste it in the app under Settings. AI calls take 30-90 seconds and bill your Anthropic account.
+Evaluate, tailor, cover letters, outreach and interview prep need an AI key. In the app go to
+Settings -> AI provider and pick one:
+- Claude: console.anthropic.com -> API keys (add billing credit first). Also does Company check
+  and AI web job search.
+- DeepSeek: platform.deepseek.com -> API keys (top up your balance first). Usually cheaper;
+  no web search, so Company check and AI web job search are off with it.
+AI calls take 30-90 seconds and bill your account with that provider.
 
 More detail: app\README.md
 TXT
