@@ -7,9 +7,11 @@ import { spawn } from "node:child_process";
 import { loadDotEnv, read, write, isAllowedKey, settings, DEFAULT_BOARDS } from "./lib/store.js";
 import { analyze } from "./lib/ats.js";
 import { findAiTells, findSkills, norm, AI_TELLS } from "./lib/text.js";
+import { parseConnections, overview, buildContext, matchCompany, rankConnections, leadQuality, RELATIONSHIPS, LEAD_STATUSES } from "./lib/network.js";
 import { searchJobs, verifyPosting, SOURCE_INFO, classifyType, flagsFor } from "./lib/jobs.js";
 import { parseUpload, resumeToDocx, coverLetterToDocx, resumeToText } from "./lib/files.js";
 import { tasks, aiStatus, requireAi } from "./lib/ai.js";
+import { evaluateWithEvidence } from "./lib/evaluate.js";
 
 loadDotEnv();
 
@@ -44,7 +46,7 @@ function seed() {
       activeFocusId: DEFAULT_FOCUS.id,
     });
   }
-  for (const [k, v] of [["resumes", { activeId: null, items: [] }], ["tracker", { items: [] }], ["saved-jobs", { items: [] }], ["documents", { items: [] }], ["companies", {}]]) {
+  for (const [k, v] of [["resumes", { activeId: null, items: [] }], ["tracker", { items: [] }], ["saved-jobs", { items: [] }], ["documents", { items: [] }], ["companies", {}], ["leads", { items: [], targets: [], dismissed: [], plan: null }], ["connections", { importedAt: null, items: [], ai: null }]]) {
     if (!read(k)) write(k, v);
   }
 }
@@ -250,8 +252,34 @@ function searchProfile() {
   const resume = activeResume();
   const text = resume ? resume.text || (resume.structured ? resumeToText(resume.structured) : "") : "";
   const skills = [...new Set([...findSkills(text), ...findSkills((focus.keywords || []).join(", "))])];
-  return { targetRoles: focus.roles || [], keywords: focus.keywords || [], avoidKeywords: focus.avoidKeywords || [], skills };
+  return { targetRoles: focus.roles || [], keywords: focus.keywords || [], avoidKeywords: focus.avoidKeywords || [], skills, resumeText: text };
 }
+
+// ---------- Networking inputs ----------
+
+function pastEmployers(resume) {
+  const out = [];
+  for (const s of resume?.structured?.sections || []) if (s.kind === "experience") for (const it of s.items || []) if (it.organization) out.push(it.organization);
+  return out;
+}
+
+function networkInputs(body = {}) {
+  const profile = read("profile", {}) || {};
+  const sp = searchProfile();
+  return {
+    profile,
+    focus: activeFocus(profile),
+    skills: sp.skills,
+    tracker: (read("tracker", { items: [] }) || {}).items || [],
+    savedJobs: (read("saved-jobs", { items: [] }) || {}).items || [],
+    workingJob: body.job?.company ? body.job : null,
+    leadsStore: read("leads", { items: [] }) || { items: [] },
+    connections: (read("connections", { items: [] }) || {}).items || [],
+    pastEmployers: pastEmployers(activeResume()),
+    search: body.search || "",
+  };
+}
+const contextFrom = (n) => buildContext({ ...n, targets: n.leadsStore.targets || [] });
 
 // ---------- Routes ----------
 
@@ -272,7 +300,7 @@ route("GET", /^\/api\/status$/, () => {
     activeResumeId: r.activeId,
     sources: sourcesStatus(),
     aiTells: AI_TELLS,
-    version: "1.0.0",
+    version: "1.1.0",
   };
 });
 
@@ -336,6 +364,63 @@ route("POST", /^\/api\/ai\/(\w+)$/, async (req, m, body) => {
     write("companies", { ...(read("companies", {}) || {}), [ck]: entry });
     return { ...entry, cached: false, usage: r.usage };
   }
+  if (name === "evaluate") return evaluateWithEvidence(fn, input);
+
+  if (name === "referralPlan") {
+    // Hand the planner the people the person already knows at this company.
+    const n = networkInputs({ job: typeof input.job === "object" ? input.job : null });
+    const ctx = contextFrom(n);
+    const co = typeof input.job === "object" ? matchCompany(input.job.company, ctx) : null;
+    if (co) {
+      const leads = (n.leadsStore.items || []).filter((l) => matchCompany(l.company, ctx)?.key === co.key && l.rating !== "not");
+      const conns = n.connections.filter((c) => matchCompany(c.company, ctx)?.key === co.key).slice(0, 15);
+      const known = [...leads.map((l) => `${l.name}, ${l.title || "?"} (${l.relationship || "lead"}; status: ${l.status})`), ...conns.map((c) => `${c.name}, ${c.position || "?"} (LinkedIn connection)`)];
+      if (known.length) input.options = { ...(input.options || {}), connections: `${input.options?.connections || ""}\n\nPeople they already know at ${co.name} (use these by name before suggesting strangers):\n- ${[...new Set(known)].join("\n- ")}`.trim() };
+    }
+  }
+
+  if (name === "rankConnections") {
+    const n = networkInputs(body);
+    if (!n.connections.length) throw fail(400, "Import your LinkedIn connections first.", "NO_CONNECTIONS");
+    const ctx = contextFrom(n);
+    const ranked = rankConnections(n.connections, ctx, { dismissed: n.leadsStore.dismissed || [], limit: 45 }).items;
+    if (!ranked.length) throw fail(400, "None of your connections match your target companies or field yet. Track some jobs or add target companies first.", "NO_MATCHES");
+    // Only first name, title and company leave this computer; no surnames, emails or profile links.
+    const result = await fn({
+      profile: input.profile,
+      candidates: ranked.map((c) => ({ id: c.id, firstName: c.firstName, company: c.company, position: c.position, connectedOn: c.connectedOn, signals: c.reasons.join("; ") })),
+      jobs: [...ctx.companies.values()].flatMap((c) => c.jobs.map((j) => ({ title: j.title, company: c.name, status: j.status }))).slice(0, 40),
+      targets: n.leadsStore.targets || [],
+    });
+    const ids = new Set(ranked.map((c) => c.id));
+    const byId = Object.fromEntries((result.data.ranked || []).filter((r) => ids.has(r.id)).map((r) => [r.id, { tier: r.tier, why: r.why, relatesTo: r.relatesTo, angle: r.angle }]));
+    const store = read("connections", { items: [] }) || { items: [] };
+    write("connections", { ...store, ai: { at: new Date().toISOString(), summary: result.data.summary, byId } });
+    return { data: { summary: result.data.summary, byId, count: Object.keys(byId).length }, usage: result.usage, model: result.model };
+  }
+
+  if (name === "leadPlan") {
+    const n = networkInputs(body);
+    const lead = (n.leadsStore.items || []).find((l) => l.id === body.leadId);
+    if (!lead) throw fail(404, "That lead no longer exists.");
+    const ctx = contextFrom(n);
+    const quality = leadQuality(lead, ctx);
+    const cached = (read("companies", {}) || {})[key(lead.company)]?.data;
+    const company = cached && !cached.raw ? [cached.oneLiner, cached.interviewProcess && `Interview process: ${cached.interviewProcess}`, cached.verdict && `Verdict: ${cached.verdict}`].filter(Boolean).join("\n") : null;
+    const result = await fn({ profile: input.profile, lead, quality, jobs: quality.jobs, company, resume: activeResume() });
+    result.leadId = lead.id;
+    result.aiTells = findAiTells(result.data.openingMessage?.text || "");
+    return result;
+  }
+
+  if (name === "networkPlan") {
+    const n = networkInputs(body);
+    const ov = overview(n);
+    const leads = (n.leadsStore.items || []).map((l) => ({ ...l, score: ov.quality[l.id]?.score ?? 0 })).sort((a, b) => b.score - a.score).slice(0, 30);
+    if (!leads.length && !ov.companies.length) throw fail(400, "Add a few leads or track a job first, so there's something to plan around.", "NOTHING_TO_PLAN");
+    return fn({ profile: input.profile, leads, companies: ov.companies.slice(0, 20), untapped: ov.suggestions.filter((c) => !c.isLead && c.tier === "strong").slice(0, 10) });
+  }
+
   if (name === "webJobSearch") {
     const focus = activeFocus(input.profile);
     input.queries = input.queries?.length ? input.queries : focus.roles?.slice(0, 3) || ["motion designer"];
@@ -361,6 +446,21 @@ route("POST", /^\/api\/ai\/(\w+)$/, async (req, m, body) => {
     result.aiTells = findAiTells(text || "");
   }
   return result;
+});
+
+// ---------- Networking ----------
+
+route("POST", /^\/api\/network\/import$/, (req, m, body) => {
+  if (!body.csv || typeof body.csv !== "string") throw fail(400, "Send {csv} with the contents of LinkedIn's Connections.csv.");
+  const { items, skipped } = parseConnections(body.csv);
+  if (!items.length) throw fail(400, "No connections found in that file.");
+  write("connections", { importedAt: new Date().toISOString(), items, ai: null });
+  return { count: items.length, skipped };
+});
+
+route("POST", /^\/api\/network\/overview$/, (req, m, body) => {
+  const store = read("connections", { items: [] }) || { items: [] };
+  return { ...overview(networkInputs(body)), importedAt: store.importedAt || null, ai: store.ai || null, relationships: RELATIONSHIPS, statuses: LEAD_STATUSES };
 });
 
 route("POST", /^\/api\/jobs\/search$/, async (req, m, body) => {

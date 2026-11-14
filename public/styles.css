@@ -314,3 +314,26 @@ dialog .dlg-foot { padding: 12px 20px; border-top: 1px solid var(--border); disp
   a { color: inherit; text-decoration: none; }
 }
 @media (max-width: 420px) { .topbar { gap: 6px; padding: 0 10px; } .brand { font-size: .95rem; } select.focus-pill { max-width: 36vw; } }
+
+/* Networking: leads, connections, company map */
+.lead.dim, .conn.dim { opacity: .6; }
+.lead .notes { margin-top: 4px; white-space: pre-wrap; }
+.next { background: var(--surface-2); border-radius: 8px; padding: 8px 12px; font-size: .9rem; }
+.next.due { background: var(--warn-soft); }
+.rates { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; }
+.rate { border: 0; border-right: 1px solid var(--border); background: none; color: var(--text); padding: 5px 10px; font-size: .83rem; font-weight: 500; cursor: pointer; min-height: 30px; }
+.rate:last-child { border-right: 0; }
+.rate:hover { background: var(--surface-2); }
+.rate[aria-pressed="true"].good { background: var(--good); color: #fff; }
+.rate[aria-pressed="true"].maybe { background: var(--warn); color: #fff; }
+.rate[aria-pressed="true"].not { background: var(--bad); color: #fff; }
+select.mini { width: auto; min-height: 30px; padding: 3px 26px 3px 8px; font-size: .85rem; }
+details.plan { border-top: 1px solid var(--border); padding-top: 10px; }
+details.plan > summary { cursor: pointer; }
+ol.steps { padding-left: 1.3em; margin: 6px 0 12px; }
+ol.steps li + li { margin-top: 6px; }
+.evidence { background: var(--info-soft); border-radius: 6px; padding: 4px 8px; margin: 4px 0; }
+.evidence.disputed { background: var(--warn-soft); }
+.co h3 { margin: 0; }
+.conn .row > .row { flex: none; }
+@media (max-width: 640px) { .conn > .row { flex-wrap: wrap !important; } .rates { order: -1; } }

@@ -8,8 +8,9 @@ browser UI. Built for motion designers first, and works for any field.
 - **ATS check**: parsing risks (tables, images, columns, text boxes), headings, contact and
   portfolio links, keyword match against a job, years of experience, writing quality, and
   generic or AI-sounding phrases. Instant, no AI needed.
-- **Evaluate & tailor**: an honest fit evaluation, then a tailored resume that keeps your
-  format. Titles, companies, dates and section order are locked to your original. You
+- **Evaluate & tailor**: an honest fit evaluation that is checked against your resume text
+  (it can't say you lack something your resume states; see "How evaluation is checked"),
+  then a tailored resume that keeps your format. Titles, companies, dates and section order are locked to your original. You
   accept or reject every change.
 - **Jobs**: currently open postings from Remotive, Himalayas, Jobicy, RemoteOK, The Muse,
   Arbeitnow and company boards (Greenhouse, Lever, Ashby). Optional keyed sources: Adzuna,
@@ -20,10 +21,16 @@ browser UI. Built for motion designers first, and works for any field.
   check is built in.
 - **Company check**: ratings with links, contractor experience, pay, interview process,
   news and red flags (cached for 14 days).
-- **Networking**: referral plan (who to reach, LinkedIn and Google X-ray searches,
-  communities, timeline) and outreach drafts with character counters.
+- **Networking & leads**: a lead tracker with a quality score, your own Good / Maybe / Not a
+  fit rating, status, contact log and next-action reminders. Import your LinkedIn
+  connections to find people at the companies you're pursuing. A company map shows your
+  jobs, leads and unused connections side by side with a suggested next move. AI can assess
+  a lead and plan the approach, re-rank your connections, and build a plan across all your
+  leads. Plus the per-job referral plan and outreach drafts with character counters.
 - **Cover letters and interview prep**, written from your profile and voice samples.
-- **Tracker**: saved → applied → interviewing → offer, with follow-up reminders.
+- **Tracker**: every job you applied to, saved → applied → interviewing → offer, with
+  follow-up reminders, how many you've sent and heard back from, and your leads at each
+  company. "I applied" on any job card records it in one click.
 
 Every AI output is editable, and nothing is ever sent for you. The AI has honesty rules: it
 won't invent experience. Where a number would help, it leaves a placeholder like
@@ -64,7 +71,7 @@ Add keys in **Settings** (or in a `.env` file, see below).
 
 | Key | What it turns on | Where to get it |
 | --- | --- | --- |
-| Anthropic API key (Claude) | Evaluation, tailoring, resume structuring, cover letters, outreach, referral plans, interview prep, company research, AI web job search | [console.anthropic.com](https://console.anthropic.com/settings/keys) → API keys (add billing credit) |
+| Anthropic API key (Claude) | Evaluation, tailoring, resume structuring, cover letters, outreach, referral plans, lead assessment, networking plans, interview prep, company research, AI web job search | [console.anthropic.com](https://console.anthropic.com/settings/keys) → API keys (add billing credit) |
 | DeepSeek API key (alternative to Claude) | The same AI features **except** company research and AI web job search (DeepSeek's API has no web search) | [platform.deepseek.com](https://platform.deepseek.com/api_keys) → API keys (top up your balance) |
 | Adzuna app ID + key | Adzuna (large job aggregator) | [developer.adzuna.com](https://developer.adzuna.com/) → register → create an app |
 | RapidAPI key | JSearch: LinkedIn, Indeed, Glassdoor, ZipRecruiter via Google for Jobs | [rapidapi.com](https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch) → subscribe to JSearch (free plan) → copy `X-RapidAPI-Key` |
@@ -104,10 +111,45 @@ doesn't support them.
 Add studios you'd like to work at; the board name is the last part of their careers URL
 (for example `boards.greenhouse.io/figma` → `figma`).
 
+## Networking
+
+**Importing LinkedIn connections.** On LinkedIn go to Me → Settings & Privacy → Data privacy →
+Get a copy of your data, tick **Connections** and request the archive. LinkedIn emails a link,
+usually within 10 minutes. Unzip it and choose `Connections.csv` in Networking → LinkedIn
+connections. Career Copilot never logs in to LinkedIn or scrapes it; that breaks LinkedIn's
+terms and gets accounts restricted. The export only has each person's name, company, title
+and the date you connected, so that is what the matching uses.
+
+**How connections are ranked** (no AI needed): they work at a company where you applied,
+saved a job, or that is on your target list; their title is in your field (from your active
+focus and your resume's skills); they look like a hiring manager or a recruiter; they work at
+one of your past employers. The optional AI second opinion sends only first name, title and
+company.
+
+**Lead quality (0–100)** adds up relationship warmth, whether they're at a company you're
+pursuing, how much say they have in hiring, and whether the conversation is moving. Your
+rating adjusts it, and "Not a fit" caps it. The reasons are shown on every lead.
+
+## How evaluation is checked
+
+The AI evaluation used to rely on the model's reading alone, which could wrongly report a
+qualification as missing. Now a text search runs around it:
+
+1. Before the AI sees anything, the app finds the resume lines that match the job's terms,
+   including different wording ("social media marketer" vs "social media marketing") and
+   passes them to the AI as verified facts, along with the full original resume text.
+2. After the AI answers, every gap marked "missing" is searched for in the resume. If a line
+   backs it up, the AI is shown the line and evaluates again (once).
+3. Anything still marked missing with a matching resume line is flagged "Check this one" with
+   the line quoted, so you can judge.
+
+The ATS check and job fit scores use the same matching, so a job outside your active focus
+still scores well when your resume shows that work.
+
 ## Privacy
 
 - Everything you enter is saved as JSON in the `data/` folder: profile, resumes, letters,
-  tracker, settings and API keys. `data/` and `.env` are in `.gitignore`.
+  tracker, leads, imported LinkedIn connections, settings and API keys. `data/` and `.env` are in `.gitignore`.
 - **This repository is public. Never commit a resume, `data/`, `.env` or any key.** Check
   `git status` before you commit.
 - The server only listens on `127.0.0.1`, so other devices on your network can't reach it.
@@ -149,12 +191,16 @@ server.js        local HTTP server + JSON API (no framework)
 lib/store.js     JSON file store in data/, settings, .env loader
 lib/files.js     PDF/DOCX/TXT parsing, DOCX export
 lib/ats.js       deterministic ATS analyzer
-lib/text.js      skill vocabulary, keyword matching, AI-tell detector
+lib/text.js      skill vocabulary, keyword and evidence matching, AI-tell detector
+lib/evaluate.js  wraps the AI evaluation in a resume text search (catches false "missing")
+lib/network.js   LinkedIn CSV import, connection ranking, lead quality, company map
 lib/jobs.js      job board adapters, type classification, flags, fit, verify
 lib/ai.js        AI tasks: Claude (structured outputs, web search) or DeepSeek (JSON mode)
 public/          the UI (index.html, styles.css, app.js); no build step
+test/            `npm test` (node:test) for matching, evaluation audit and networking logic
 ```
 
 API (all JSON, localhost only): `GET /api/status`, `GET /api/sources`,
 `GET|PUT /api/state/:key`, `POST /api/parse`, `POST /api/ats`, `POST /api/ai/:task`,
-`POST /api/jobs/search`, `POST /api/jobs/verify`, `POST /api/export/docx`.
+`POST /api/jobs/search`, `POST /api/jobs/verify`, `POST /api/export/docx`,
+`POST /api/network/import`, `POST /api/network/overview`.

@@ -89,10 +89,11 @@ const fileSafe = (s) => String(s || "document").replace(/[^\w.-]+/g, "-").replac
 const S = {
   status: { aiReady: false, ai: { provider: "claude", label: "Claude", webSearch: true }, sources: [], aiTells: [] },
   profile: null, resumes: { activeId: null, items: [] }, tracker: { items: [] }, savedJobs: { items: [] }, documents: { items: [] }, companies: {}, settings: null,
+  leads: { items: [], targets: [], dismissed: [], plan: null }, net: null,
   ui: { job: ls.get("job", { title: "", company: "", location: "", type: "", salary: "", url: "", description: "" }), resumeId: null, jobsTab: "results", lastSearch: ls.get("lastSearch", null) },
   pending: {}, results: {}, errors: {},
 };
-const STORE_KEYS = { profile: "profile", resumes: "resumes", tracker: "tracker", savedJobs: "saved-jobs", documents: "documents" };
+const STORE_KEYS = { profile: "profile", resumes: "resumes", tracker: "tracker", savedJobs: "saved-jobs", documents: "documents", leads: "leads" };
 const savers = {};
 function save(key, now = false) {
   savers[key] ||= debounce(() => api("PUT", `/api/state/${STORE_KEYS[key]}`, S[key]).catch((e) => toast(`Couldn't save: ${e.message}`, "bad")), 350);
@@ -102,14 +103,16 @@ function save(key, now = false) {
 const saveJob = debounce(() => ls.set("job", S.ui.job), 300);
 
 async function loadAll() {
-  const [status, profile, resumes, tracker, savedJobs, documents, companies] = await Promise.all([
+  const [status, profile, resumes, tracker, savedJobs, documents, companies, leads] = await Promise.all([
     api("GET", "/api/status"), api("GET", "/api/state/profile"), api("GET", "/api/state/resumes"), api("GET", "/api/state/tracker"),
-    api("GET", "/api/state/saved-jobs"), api("GET", "/api/state/documents"), api("GET", "/api/state/companies"),
+    api("GET", "/api/state/saved-jobs"), api("GET", "/api/state/documents"), api("GET", "/api/state/companies"), api("GET", "/api/state/leads"),
   ]);
   Object.assign(S, {
     status, profile: profile || {}, resumes: resumes || { activeId: null, items: [] }, tracker: tracker || { items: [] },
     savedJobs: savedJobs || { items: [] }, documents: documents || { items: [] }, companies: companies || {},
+    leads: { items: [], targets: [], dismissed: [], plan: null, ...(leads || {}) },
   });
+  S.leads.items ||= [];
   S.profile.focuses ||= [];
   S.resumes.items ||= [];
   S.tracker.items ||= [];
@@ -145,6 +148,7 @@ function errorHTML(e) {
   }
   if (e.code === "NO_WEB_SEARCH") return `<div class="notice info"><div class="grow">${esc(e.message)}</div><a class="btn small" href="#/settings">Settings</a></div>`;
   if (e.code === "NO_RESUME") return `<div class="notice info"><div class="grow">${esc(e.message)}</div><a class="btn small" href="#/resumes">Go to Resumes</a></div>`;
+  if (["NO_CONNECTIONS", "NO_MATCHES", "NOTHING_TO_PLAN"].includes(e.code)) return `<div class="notice info"><div class="grow">${esc(e.message)}</div></div>`;
   if (e.code === "NO_JOB") return `<div class="notice info"><div class="grow">${esc(e.message)}</div></div>`;
   if (e.code === "BAD_API_KEY" || e.code === "NO_CREDIT" || e.code === "BAD_MODEL") return `<div class="notice bad"><div class="grow">${esc(e.message)}</div><a class="btn small" href="#/settings">Settings</a></div>`;
   return `<div class="notice bad"><div class="grow"><b>That didn't work.</b> ${esc(e.message)}</div></div>`;
@@ -529,12 +533,13 @@ function view(id, title, render) {
 function renderNav() {
   const cur = currentRoute().id;
   const due = S.tracker.items.filter(isFollowUpDue).length;
-  $("#sidebar").innerHTML = NAV.map(([g, ids]) => `<div class="nav-group">${g}</div>${ids.map((id) => `<a href="#/${id}" ${id === cur ? 'aria-current="page"' : ""}><svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[id]}</svg>${VIEWS[id].title}${id === "tracker" && due ? `<span class="badge warn">${due}</span>` : ""}<span class="badge accent" data-busy="${id}" hidden>…</span></a>`).join("")}`).join("");
+  const leadsDue = S.leads.items.filter(isLeadDue).length;
+  $("#sidebar").innerHTML = NAV.map(([g, ids]) => `<div class="nav-group">${g}</div>${ids.map((id) => `<a href="#/${id}" ${id === cur ? 'aria-current="page"' : ""}><svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[id]}</svg>${VIEWS[id].title}${id === "tracker" && due ? `<span class="badge warn">${due}</span>` : ""}${id === "networking" && leadsDue ? `<span class="badge warn">${leadsDue}</span>` : ""}<span class="badge accent" data-busy="${id}" hidden>…</span></a>`).join("")}`).join("");
   updateNavBusy();
   const fp = $("#focusPill");
   fp.innerHTML = (S.profile.focuses || []).map((f) => `<option value="${esc(f.id)}" ${f.id === activeFocus().id ? "selected" : ""}>${esc(f.label)}</option>`).join("");
 }
-const BUSY_MAP = { evaluate: ["evaluate", "tailor"], jobs: ["jobs"], companies: ["company"], networking: ["referral", "outreach"], cover: ["cover", "humanize"], interview: ["interview"], profile: ["about"], resumes: ["structure"], ats: ["extract"] };
+const BUSY_MAP = { evaluate: ["evaluate", "tailor"], jobs: ["jobs"], companies: ["company"], networking: ["referral", "outreach", "leadplan", "netplan", "rankconn"], cover: ["cover", "humanize"], interview: ["interview"], profile: ["about"], resumes: ["structure"], ats: ["extract"] };
 function updateNavBusy() {
   for (const el of $$("[data-busy]")) el.hidden = !(BUSY_MAP[el.dataset.busy] || []).some((k) => S.pending[k]);
 }
@@ -595,6 +600,7 @@ view("dashboard", "Dashboard", (main) => {
   if (!r) actions.push(["Add your resume (PDF, DOCX or paste).", "#/resumes", "Resumes"]);
   else if (!r.structured && S.status.aiReady) actions.push([`Structure "${r.name}" so tailoring can keep its format.`, "#/resumes", "Resumes"]);
   for (const t of due) actions.push([`Follow up with ${t.company} about ${t.role}${t.contacts ? ` (${t.contacts.split("\n")[0]})` : ""}.`, "#/tracker", "Tracker"]);
+  for (const l of S.leads.items.filter(isLeadDue).slice(0, 4)) actions.push([`${l.nextAction || "Follow up"}: ${l.name}${l.company ? ` (${l.company})` : ""}.`, "#/networking", "Leads"]);
   const savedNotApplied = S.savedJobs.items.filter((j) => !items.some((t) => t.jobId === j.id && t.status !== "saved")).length;
   if (savedNotApplied) actions.push([`${savedNotApplied} saved job${savedNotApplied > 1 ? "s" : ""} waiting. Evaluate one and apply.`, "#/jobs?tab=saved", "Saved jobs"]);
   if (!last || Date.now() - new Date(last.at).getTime() > 2 * 86400000) actions.push(["Run a fresh job search. New postings appear daily.", "#/jobs", "Jobs"]);
@@ -607,7 +613,7 @@ view("dashboard", "Dashboard", (main) => {
     <div class="card"><div class="stat">${items.filter((t) => ["applied", "interviewing"].includes(t.status)).length}</div><div class="stat-label">Active applications</div></div>
     <div class="card"><div class="stat" style="color:${due.length ? "var(--bad)" : "inherit"}">${due.length}</div><div class="stat-label">Follow-ups due</div></div>
     <div class="card"><div class="stat">${counts.interviewing}</div><div class="stat-label">Interviewing</div></div>
-    <div class="card"><div class="stat">${S.savedJobs.items.length}</div><div class="stat-label">Saved jobs</div></div>
+    <div class="card"><div class="stat">${S.leads.items.filter((l) => l.rating !== "not" && l.status !== "dead").length}</div><div class="stat-label">Networking leads · ${S.savedJobs.items.length} saved jobs</div></div>
   </div>
   <div class="grid cols-2" style="margin-top:14px">
     <div class="card"><div class="card-head"><h2>Next actions</h2></div>
@@ -919,8 +925,9 @@ function atsReportHTML(rep) {
   </div>
   ${k ? `<div class="card" style="margin-top:14px"><h2>Keywords from the job</h2>
     <div class="grid cols-2"><div><h4>In your resume (${k.matched.length})</h4><div class="chips">${k.matched.map((x) => `<span class="chip good">${esc(x)}</span>`).join("") || '<span class="muted small">None</span>'}</div></div>
-    <div><h4>Missing (${k.missing.length})</h4><div class="chips">${k.missing.map((x) => `<span class="chip bad">${esc(x)}</span>`).join("") || '<span class="muted small">None</span>'}</div><p class="small muted" style="margin-top:6px">Only add the ones that are true for you.</p></div></div>
-    <p class="small" style="margin-top:10px">${k.requiredYears ? `Job asks for <b>${k.requiredYears}+ years</b>; your dates span about <b>${k.estimatedYears ?? "?"}</b>. ` : ""}${k.titleMatch === false ? "The job title isn't on your resume." : k.titleMatch ? "The job title appears on your resume." : ""}</p></div>` : ""}
+    <div><h4>Missing (${k.missing.length})</h4><div class="chips">${k.missing.map((x) => `<span class="chip bad">${esc(x)}</span>`).join("") || '<span class="muted small">None</span>'}</div><p class="small muted" style="margin-top:6px">“Missing” means this wording wasn't found, not that you lack the skill. Only add the ones that are true for you.</p></div></div>
+    ${k.reworded?.length ? `<p class="small" style="margin-top:10px"><b>Counted, but worded differently on your resume:</b> ${k.reworded.map((x) => `${esc(x)} <span class="muted">(“${esc(k.evidence[x]?.quote || "")}”)</span>`).join(" · ")}. Matching the posting's wording helps literal keyword searches.</p>` : ""}
+    <p class="small" style="margin-top:10px">${k.requiredYears ? `Job asks for <b>${k.requiredYears}+ years</b>; your dates span about <b>${k.estimatedYears ?? "?"}</b>. ` : ""}${k.titleMatch ? "The job title appears on your resume." : k.titleEvidence?.level === "partial" ? `Your resume shows “${esc(k.titleEvidence.phrase)}” but not the full job title.` : k.titleMatch === false ? "The job title isn't on your resume." : ""}</p></div>` : ""}
   <div class="card" style="margin-top:14px"><h2>Issues to fix (${rep.issues.length})</h2>
     ${rep.issues.length ? `<ul class="list">${rep.issues.map((i) => `<li class="issue">${sevBadge(i.severity)}<div><b>${esc(i.area)}:</b> ${esc(i.message)}</div><div class="fix">${esc(i.fix)}</div></li>`).join("")}</ul>` : `<p class="muted">No issues found.</p>`}</div>
   <div class="grid cols-2" style="margin-top:14px">
@@ -1020,9 +1027,8 @@ view("evaluate", "Evaluate & Tailor", (main) => {
     const r = pickedResume();
     if (!r) return toast("Add a resume first.", "bad");
     if (!hasJob()) return toast("Paste the job description first.", "bad");
-    const ats = await atsFor(r).catch(() => null);
     S.ui.evalAnswers = [];
-    runAI("evaluate", "evaluate", { resume: resumeForAI(r), job: jobForAI(), ats: ats && { overall: ats.overall, keyword: ats.keyword, issues: ats.issues.slice(0, 8) } }, { label: "Reading the job like a hiring manager would…", expect: 60 });
+    runAI("evaluate", "evaluate", { resume: resumeForAI(r), job: jobForAI() }, { label: "Reading the job like a hiring manager would, and checking every claim against your resume…", expect: 75 });
   });
   main.addEventListener("input", (e) => {
     if (e.target.id === "tFacts") t.facts = e.target.value;
@@ -1060,18 +1066,28 @@ slots.evaluate = {
       <p style="margin:8px 0 0;font-size:1.05rem" contenteditable="true">${esc(d.headline)}</p></div></div>
       <hr><h4>What a recruiter sees in 6 seconds</h4><p contenteditable="true">${esc(d.recruiterSixSeconds)}</p>
       <div class="grid cols-2"><div><h4>Strengths</h4><ul class="list">${d.strengths.map((s) => `<li><b contenteditable="true">${esc(s.point)}</b><div class="small muted" contenteditable="true">${esc(s.evidence)}</div></li>`).join("")}</ul></div>
-      <div><h4>Gaps</h4><ul class="list">${d.gaps.map((g) => `<li><div class="row">${sevBadge(g.severity)}<b class="grow">${esc(g.requirement)}</b></div><div class="small muted">${esc(g.status)}</div><div class="small" contenteditable="true">${esc(g.suggestion)}</div></li>`).join("") || '<li class="muted">No major gaps.</li>'}</ul></div></div>
+      <div><h4>Gaps</h4><ul class="list">${d.gaps.map((g) => `<li><div class="row">${sevBadge(g.severity)}<b class="grow">${esc(g.requirement)}</b></div><div class="small muted">${esc(g.status)}</div>${g.resumeEvidence ? `<div class="small evidence ${g.disputed ? "disputed" : ""}">${g.disputed ? "<b>Check this one:</b> your resume says " : "On your resume: "}“${esc(g.resumeEvidence)}”${g.disputed ? ". If that covers it, ignore this gap." : ""}</div>` : ""}<div class="small" contenteditable="true">${esc(g.suggestion)}</div></li>`).join("") || '<li class="muted">No major gaps.</li>'}</ul></div></div>
+      ${r.evidence ? `<p class="small muted" style="margin-top:10px">Checked against your resume text: ${r.evidence.found} of the job's terms were found there and given to the AI as fact.${r.evidence.rechecked ? ` The first pass called ${r.evidence.rechecked} thing${r.evidence.rechecked > 1 ? "s" : ""} missing that your resume does show, so it was sent back and re-evaluated.` : ""}${r.evidence.disputed ? ` ${r.evidence.disputed} gap${r.evidence.disputed > 1 ? "s are" : " is"} still flagged “check this one”.` : ""} Think it got something wrong? Put the facts in “Extra facts” below and evaluate again.</p>` : ""}
       <hr><h4>Section by section</h4><ul class="list">${d.sectionFeedback.map((s) => `<li><b>${esc(s.section)}:</b> <span contenteditable="true">${esc(s.feedback)}</span></li>`).join("")}</ul>
       <hr><h4>Portfolio / reel</h4><p contenteditable="true">${esc(d.portfolioAdvice)}</p>
       ${d.questionsForYou?.length ? `<hr><h4>Questions only you can answer</h4><p class="small muted">Your answers are passed to tailoring as true facts. Skip any you'd rather not answer.</p>
         ${d.questionsForYou.map((q, i) => `<div class="field"><label>${esc(q)}</label><textarea data-ans="${i}" style="min-height:56px">${esc(S.ui.evalAnswers?.[i]?.a || "")}</textarea></div>`).join("")}` : ""}
-      <div class="row end"><button class="btn small" id="evSave">Save evaluation</button></div></div>`;
+      <div class="row end"><button class="btn small" data-track="saved">Track this job</button><button class="btn small" data-track="applied">I applied</button><button class="btn small" id="evSave">Save evaluation</button></div></div>`;
   },
   bind: (el, r) => {
     S.ui.evalAnswers ||= [];
     el.addEventListener("input", (e) => {
       const i = e.target.dataset.ans;
       if (i != null) S.ui.evalAnswers[i] = { q: r.data.questionsForYou[i], a: e.target.value };
+    });
+    el.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-track]");
+      if (!b) return;
+      const j = S.ui.job;
+      if (!j.title && !j.company) return toast("Add the job title and company first.", "bad");
+      trackJob({ id: j.id || `manual:${uid()}`, title: j.title, company: j.company, url: j.url, location: j.location, type: j.type, salary: j.salary, description: j.description }, b.dataset.track, { resumeId: pickedResume()?.id || "" });
+      toast(b.dataset.track === "applied" ? "Marked as applied. Follow-up set for a week from now." : "Added to tracker");
+      renderNav();
     });
     $("#evSave", el)?.addEventListener("click", () => saveDocument("evaluation", `Evaluation: ${S.ui.job.title || "job"} @ ${S.ui.job.company || ""}`, { ...r.data, edited: el.innerText }));
   },
@@ -1266,10 +1282,13 @@ function jobCardHTML(j) {
   const v = S.ui.verify[j.url];
   const vBadge = v ? `<span class="badge ${v.status === "open" ? "good" : v.status === "closed" || v.status === "likely-closed" ? "bad" : ""}" title="${esc(v.reason)}">${v.status === "open" ? "Still open" : v.status === "closed" ? "Closed" : v.status === "likely-closed" ? "Likely closed" : v.status === "checking" ? "Checking…" : "Couldn't verify"}</span>` : "";
   const typeClass = /Contract|Freelance|Temporary/.test(j.type) ? "warn" : j.type === "Full-time" ? "good" : "";
+  const tr = trackedFor(j);
+  const applied = tr && tr.status !== "saved";
+  const trBadge = tr ? `<span class="badge ${applied ? "good" : "accent"}">${applied ? `${STATUS_LABEL[tr.status]}${tr.appliedAt ? ` ${fmtDate(tr.appliedAt)}` : ""}` : "In tracker"}</span>` : "";
   return `<article class="card job" data-job="${esc(j.id)}">
     <div><h3><a href="${esc(j.applyUrl || j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a></h3>
       <div class="meta"><b>${esc(j.company)}</b><span>${esc(j.location || "")}</span>${j.salary ? `<span>${esc(j.salary)}</span>` : ""}<span>${j.postedAt ? ago(j.postedAt) : esc(j.postedText || "date unknown")}</span></div>
-      <div class="row" style="margin-top:6px;gap:6px"><span class="badge ${typeClass}">${esc(j.type)}</span>${j.remote ? '<span class="badge info">Remote</span>' : ""}<span class="badge">${esc(j.source)}${j.via ? ` · ${esc(j.via)}` : ""}</span>${(j.alsoOn || []).length ? `<span class="badge" title="Also listed on">also on ${esc(j.alsoOn.join(", "))}</span>` : ""}${vBadge}</div>
+      <div class="row" style="margin-top:6px;gap:6px"><span class="badge ${typeClass}">${esc(j.type)}</span>${j.remote ? '<span class="badge info">Remote</span>' : ""}<span class="badge">${esc(j.source)}${j.via ? ` · ${esc(j.via)}` : ""}</span>${(j.alsoOn || []).length ? `<span class="badge" title="Also listed on">also on ${esc(j.alsoOn.join(", "))}</span>` : ""}${vBadge}${trBadge}</div>
     </div>
     <div class="side">${scoreRing(j.fit?.score ?? 0, true)}<span class="small muted">fit</span></div>
     <div class="full small">${(j.fit?.why || []).length ? `<span class="muted">Why: ${esc(j.fit.why.join(" · "))}</span>` : ""}${j.fit?.missingSkills?.length ? `<div class="muted">Skills they list that you haven't: ${esc(j.fit.missingSkills.slice(0, 6).join(", "))}</div>` : ""}</div>
@@ -1280,7 +1299,8 @@ function jobCardHTML(j) {
       <button class="btn small" data-ja="cover">Cover letter</button>
       <button class="btn small" data-ja="company">Company check</button>
       <button class="btn small" data-ja="network">Referrals</button>
-      <button class="btn small" data-ja="track">Track</button>
+      ${applied ? "" : `<button class="btn small" data-ja="applied">I applied</button>`}
+      ${tr ? "" : `<button class="btn small" data-ja="track">Track</button>`}
       <button class="btn small ghost" data-ja="verify">Verify still open</button>
       <button class="btn small ghost" data-ja="desc" aria-expanded="false">Details</button>
     </div>
@@ -1288,13 +1308,26 @@ function jobCardHTML(j) {
   </article>`;
 }
 
-function trackJob(j, status = "saved") {
-  let t = S.tracker.items.find((x) => x.jobId === j.id || (x.url && x.url === (j.applyUrl || j.url)));
+const trackedFor = (j) => S.tracker.items.find((x) => (j.id && x.jobId === j.id) || (x.url && x.url === (j.applyUrl || j.url)) || (x.company && x.role && norm2(x.company) === norm2(j.company) && norm2(x.role) === norm2(j.title)));
+const norm2 = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+// "Duolingo, Inc." and "Duolingo" are the same company.
+const coKey = (v) => norm2(v).replace(/\b(incorporated|inc|llc|ltd|limited|corp|corporation|co|company|gmbh|plc|group|holdings|the)\b/g, " ").replace(/\s+/g, " ").trim() || norm2(v);
+const sameCompany = (a, b) => { const x = coKey(a), y = coKey(b); return !!x && !!y && (x === y || x.startsWith(`${y} `) || y.startsWith(`${x} `)); };
+const leadsAt = (company) => S.leads.items.filter((l) => l.rating !== "not" && sameCompany(l.company, company));
+
+function trackJob(j, status = "saved", extra = {}) {
+  let t = trackedFor(j);
   if (!t) {
-    t = { id: uid(), jobId: j.id, company: j.company, role: j.title, url: j.applyUrl || j.url, location: j.location, type: j.type, salary: j.salary, description: j.description, status, savedAt: today(), appliedAt: "", followUpAt: "", contacts: "", notes: "", resumeId: "", coverId: "", history: [{ status, at: new Date().toISOString() }] };
+    t = { id: uid(), jobId: j.id, company: j.company, role: j.title, url: j.applyUrl || j.url, location: j.location, type: j.type, salary: j.salary, description: j.description, status: "saved", savedAt: today(), appliedAt: "", followUpAt: "", contacts: "", notes: "", resumeId: "", coverId: "", source: j.source || "", history: [{ status: "saved", at: new Date().toISOString() }], ...extra };
     S.tracker.items.unshift(t);
-    save("tracker");
   }
+  // Marking applied moves a saved entry forward; it never moves an interview back.
+  if (status === "applied" && t.status === "saved") {
+    Object.assign(t, { status: "applied", appliedAt: t.appliedAt || today(), followUpAt: t.followUpAt || addDays(7), ...extra });
+    (t.history ||= []).push({ status: "applied", at: new Date().toISOString() });
+  }
+  save("tracker");
+  S.net = null; // companies changed, so the network view recomputes
   return t;
 }
 
@@ -1340,9 +1373,10 @@ function bindJobActions(root) {
     if (a === "verify") verifyJobs([j]);
     if (a === "evaluate") { setWorkingJob(j); go("evaluate"); }
     if (a === "cover") { setWorkingJob(j); go("cover"); }
-    if (a === "network") { setWorkingJob(j); go("networking"); }
+    if (a === "network") { setWorkingJob(j); S.ui.netTab = "referral"; S.net = null; go("networking"); }
     if (a === "company") go("companies", `c=${encodeURIComponent(j.company)}&role=${encodeURIComponent(j.title)}`);
-    if (a === "track") { trackJob(j); toast("Added to tracker"); renderNav(); }
+    if (a === "track") { trackJob(j); toast("Added to tracker"); renderNav(); redrawJobBadges([j]); }
+    if (a === "applied") { trackJob(j, "applied", { resumeId: activeResume()?.id || "" }); toast("Marked as applied. Follow-up set for a week from now."); renderNav(); redrawJobBadges([j]); }
   });
 }
 
@@ -1508,16 +1542,490 @@ function searchLink(q) {
   return "";
 }
 
+// ----- Leads: data helpers -----
+const RELATIONSHIPS = ["Friend / close contact", "Former colleague", "Classmate / alumni", "Met in person", "LinkedIn connection", "Community member", "Mutual connection", "Cold (no link yet)"];
+const LEAD_STATUSES = ["new", "researching", "reached out", "replied", "talking", "referred", "dormant", "dead"];
+const LEAD_STATUS_LABEL = { new: "New", researching: "Researching", "reached out": "Reached out", replied: "Replied", talking: "In conversation", referred: "Referred / intro'd", dormant: "Gone quiet", dead: "Dead end" };
+const LEAD_STATUS_CLASS = { new: "", researching: "", "reached out": "info", replied: "accent", talking: "accent", referred: "good", dormant: "warn", dead: "bad" };
+const ROLE_TYPES = ["auto", "hiring manager", "team member", "recruiter", "peer in field", "leader", "other"];
+const CONTACT_TYPES = [["sent", "I sent a message", "reached out"], ["reply", "They replied", "replied"], ["chat", "We talked (call, coffee, video)", "talking"], ["intro", "They introduced me to someone", "referred"], ["referral", "They referred me", "referred"], ["note", "Just a note", ""]];
+const RATING_LABEL = { good: "Good lead", maybe: "Maybe", not: "Not a fit" };
+
+const leadQ = (l) => S.net?.quality?.[l.id] || { score: 0, tier: "—", reasons: [], jobs: [], nextStep: "", roleType: "other" };
+const isLeadDue = (l) => !!l.nextActionAt && l.nextActionAt <= today() && l.rating !== "not" && !["dead", "dormant"].includes(l.status);
+const leadKey = (p) => `${String(p.name || "").trim().toLowerCase()}|${String(p.company || "").trim().toLowerCase()}`;
+const cleanUrl = (u) => String(u || "").toLowerCase().replace(/[?#].*$/, "").replace(/\/+$/, "").replace(/^https?:\/\/(www\.)?/, "");
+const findLead = (p) => S.leads.items.find((l) => (p.url && l.url && cleanUrl(l.url) === cleanUrl(p.url)) || leadKey(l) === leadKey(p));
+
+async function refreshNet() {
+  const j = S.ui.job || {};
+  S.net = await api("POST", "/api/network/overview", { job: { id: j.id, title: j.title, company: j.company }, search: S.ui.connSearch || "" });
+  return S.net;
+}
+
+// Save leads right away, recompute quality and the company map, redraw.
+async function commitLeads({ redraw = true } = {}) {
+  try {
+    await save("leads", true);
+    await refreshNet();
+  } catch (e) {
+    toast(`Couldn't save: ${e.message}`, "bad");
+  }
+  if (redraw) rerender();
+  else renderNav();
+}
+
+function addLead(p) {
+  const existing = findLead(p);
+  if (existing) return existing;
+  const lead = {
+    id: uid(), name: "", title: "", company: "", url: "", email: "", relationship: "LinkedIn connection", roleType: "auto", status: "new", rating: "",
+    howKnow: "", notes: "", tags: [], source: "manual", nextAction: "", nextActionAt: "", lastContactAt: "", interactions: [], plan: null, createdAt: new Date().toISOString(), ...p,
+  };
+  S.leads.items.unshift(lead);
+  return lead;
+}
+
+function logInteraction(lead, { type, note = "", at = today() }) {
+  const def = CONTACT_TYPES.find(([t]) => t === type);
+  (lead.interactions ||= []).unshift({ at, type: def ? def[1] : type, note });
+  if (type !== "note") lead.lastContactAt = at;
+  if (def?.[2]) {
+    // Status only moves forward from logging; you can still set it by hand.
+    const order = LEAD_STATUSES.indexOf(def[2]), cur = LEAD_STATUSES.indexOf(lead.status);
+    if (order > cur || ["dormant", "dead"].includes(lead.status)) lead.status = def[2];
+  }
+  if (type === "sent") { lead.nextActionAt = addDays(7); lead.nextAction = "Follow up if no reply"; }
+  if (type === "reply") { lead.nextActionAt = addDays(1); lead.nextAction = "Reply and suggest a short chat"; }
+  if (type === "chat" || type === "referral" || type === "intro") { lead.nextActionAt = addDays(1); lead.nextAction = "Send a thank-you"; }
+}
+
+function logContactDialog(lead, preset = "sent", note = "") {
+  dialog(`<form method="dialog"><div class="dlg-body"><h2>Log contact with ${esc(lead.name)}</h2>
+    <div class="field"><label>What happened</label><select name="type">${CONTACT_TYPES.map(([v, l]) => `<option value="${v}" ${v === preset ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+    <div class="field"><label>When</label><input type="date" name="at" value="${today()}"></div>
+    <div class="field"><label>Note <span class="hint">what was said, what they suggested</span></label><textarea name="note">${esc(note)}</textarea></div>
+    <p class="small muted">Logging updates the lead's status and sets the next reminder (a follow-up 7 days after you send a message).</p>
+  </div><div class="dlg-foot"><span class="grow"></span><button type="button" class="btn" data-close>Cancel</button><button class="btn primary" value="save">Log it</button></div></form>`, {
+    onOpen: (dlg) => {
+      const f = $("form", dlg);
+      f.addEventListener("submit", () => {
+        logInteraction(lead, { type: f.type.value, note: f.note.value.trim(), at: f.at.value || today() });
+        commitLeads();
+        toast("Logged");
+      });
+    },
+  });
+}
+
+function editLead(lead = null, preset = {}) {
+  const isNew = !lead;
+  const l = lead ? clone(lead) : { id: uid(), name: "", title: "", company: "", url: "", email: "", relationship: "Cold (no link yet)", roleType: "auto", status: "new", rating: "", howKnow: "", notes: "", tags: [], source: "manual", nextAction: "", nextActionAt: "", lastContactAt: "", interactions: [], plan: null, createdAt: new Date().toISOString(), ...preset };
+  const q = lead ? leadQ(lead) : null;
+  dialog(`<form method="dialog"><div class="dlg-body"><h2>${isNew ? "Add a lead" : esc(l.name)}</h2>
+    <div class="grid cols-2">
+      <div class="field"><label>Name</label><input type="text" name="name" value="${esc(l.name)}" required></div>
+      <div class="field"><label>Title</label><input type="text" name="title" value="${esc(l.title)}" placeholder="Motion Lead"></div>
+      <div class="field"><label>Company</label><input type="text" name="company" value="${esc(l.company)}" list="leadCompanies"><datalist id="leadCompanies">${[...new Set([...S.tracker.items.map((t) => t.company), ...S.savedJobs.items.map((j) => j.company)].filter(Boolean))].map((c) => `<option value="${esc(c)}">`).join("")}</datalist></div>
+      <div class="field"><label>Relationship</label><select name="relationship">${RELATIONSHIPS.map((r) => `<option ${l.relationship === r ? "selected" : ""}>${r}</option>`).join("")}</select></div>
+      <div class="field"><label>Their role in hiring <span class="hint">auto reads it from the title${q ? `: ${esc(q.roleType)}` : ""}</span></label><select name="roleType">${ROLE_TYPES.map((r) => `<option ${l.roleType === r ? "selected" : ""}>${r}</option>`).join("")}</select></div>
+      <div class="field"><label>Status</label><select name="status">${LEAD_STATUSES.map((s) => `<option value="${s}" ${l.status === s ? "selected" : ""}>${LEAD_STATUS_LABEL[s]}</option>`).join("")}</select></div>
+      <div class="field"><label>Profile link</label><input type="url" name="url" value="${esc(l.url)}" placeholder="https://www.linkedin.com/in/…"></div>
+      <div class="field"><label>Email</label><input type="email" name="email" value="${esc(l.email)}"></div>
+      <div class="field"><label>Your rating</label><select name="rating"><option value="">Not rated</option>${Object.entries(RATING_LABEL).map(([v, t]) => `<option value="${v}" ${l.rating === v ? "selected" : ""}>${t}</option>`).join("")}</select></div>
+      <div class="field"><label>Tags <span class="hint">comma separated</span></label><input type="text" name="tags" value="${esc((l.tags || []).join(", "))}" placeholder="SCAD, met at Blend"></div>
+    </div>
+    <div class="field"><label>How you know them <span class="hint">shared school, project, event, mutual friend</span></label><input type="text" name="howKnow" value="${esc(l.howKnow)}"></div>
+    <div class="field"><label>Notes <span class="hint">their work, what you talked about, why this lead is or isn't good</span></label><textarea name="notes">${esc(l.notes)}</textarea></div>
+    <div class="grid cols-2"><div class="field"><label>Next action</label><input type="text" name="nextAction" value="${esc(l.nextAction)}" placeholder="Send first note"></div>
+      <div class="field"><label>Do it by</label><div class="row" style="flex-wrap:nowrap"><input type="date" name="nextActionAt" value="${esc(l.nextActionAt)}"><button type="button" class="btn small" data-plus="3">+3d</button><button type="button" class="btn small" data-plus="7">+7d</button></div></div></div>
+    ${l.interactions?.length ? `<h4>Contact history</h4><ul class="plain small">${l.interactions.map((i) => `<li><b>${fmtDate(i.at)}</b> · ${esc(i.type)}${i.note ? `: ${esc(i.note)}` : ""}</li>`).join("")}</ul>` : ""}
+  </div><div class="dlg-foot">${isNew ? "" : `<button type="button" class="btn ghost danger" data-delete>Delete</button>`}<span class="grow"></span><button type="button" class="btn" data-close>Cancel</button><button class="btn primary" value="save">Save</button></div></form>`, {
+    onOpen: (dlg) => {
+      const f = $("form", dlg);
+      $$("[data-plus]", dlg).forEach((b) => b.addEventListener("click", () => (f.nextActionAt.value = addDays(Number(b.dataset.plus)))));
+      $("[data-delete]", dlg)?.addEventListener("click", () => {
+        if (!confirm(`Delete ${l.name} from your leads?`)) return;
+        S.leads.items = S.leads.items.filter((x) => x.id !== l.id);
+        dlg.close();
+        commitLeads();
+      });
+      f.addEventListener("submit", () => {
+        const fd = Object.fromEntries(new FormData(f));
+        Object.assign(l, fd, { tags: csv(fd.tags) });
+        const i = S.leads.items.findIndex((x) => x.id === l.id);
+        if (i >= 0) S.leads.items[i] = l;
+        else {
+          const dupe = findLead(l);
+          if (dupe) { toast(`${dupe.name} is already a lead.`, "bad"); return; }
+          S.leads.items.unshift(l);
+        }
+        commitLeads();
+      });
+    },
+  });
+}
+
+function draftForLead(lead) {
+  const q = leadQ(lead);
+  const job = q.jobs?.[0];
+  const warm = ["Friend / close contact", "Former colleague", "Classmate / alumni", "Met in person"].includes(lead.relationship);
+  S.ui.outreach = {
+    channel: lead.email && !lead.url ? "Email" : lead.relationship === "Cold (no link yet)" || lead.relationship === "Mutual connection" ? "LinkedIn connection note" : "LinkedIn message",
+    stage: lead.status === "reached out" ? "follow-up (no reply)" : lead.status === "talking" ? "ask for a referral (after rapport)" : lead.status === "referred" ? "thank-you after a chat" : "first contact",
+    recipient: [lead.name, [lead.title, lead.company].filter(Boolean).join(" at ")].filter(Boolean).join(", "),
+    context: [lead.relationship && `Relationship: ${lead.relationship}`, lead.howKnow, lead.notes, lead.interactions?.length ? `History: ${lead.interactions.slice(0, 4).map((i) => `${i.at} ${i.type}${i.note ? ` (${i.note})` : ""}`).join("; ")}` : ""].filter(Boolean).join("\n"),
+    goal: lead.plan?.bestAsk || (warm ? "their honest read on the team and whether it's worth applying" : "a 15-minute chat about their team"),
+    company: lead.company || "", jobTitle: job?.title || "",
+  };
+  S.ui.outreachLeadId = lead.id;
+  delete S.results.outreach;
+  S.ui.netTab = "outreach";
+  rerender();
+}
+
+function runLeadPlan(lead) {
+  S.ui.planFor = lead.id;
+  runAI("leadplan", "leadPlan", { leadId: lead.id, job: jobForAI() }, {
+    label: `Assessing ${lead.name} and planning the approach…`, expect: 45,
+    onDone: async (r) => {
+      const l = S.leads.items.find((x) => x.id === r.leadId);
+      if (!l) return;
+      l.plan = { ...r.data, at: new Date().toISOString() };
+      S.ui.openPlan = l.id;
+      delete S.results.leadplan;
+      await commitLeads({ redraw: currentRoute().id === "networking" });
+    },
+  });
+}
+
+function leadPlanHTML(l) {
+  const p = l.plan;
+  if (!p) return "";
+  const lim = channelLimit(p.openingMessage?.channel || "");
+  return `<details class="full plan" ${S.ui.openPlan === l.id ? "open" : ""}><summary><b>Approach plan</b> <span class="small muted">· AI quality read ${Math.round(p.quality?.score ?? 0)}/100 (${esc(p.quality?.tier || "")}) · ${ago(p.at)}</span></summary>
+    <p class="small">${esc(p.quality?.reasoning || "")}</p>
+    <div class="grid cols-2"><div><h4>How they relate to your targets</h4><p class="small">${esc(p.companyRelation)}</p></div><div><h4>Best thing to ask for</h4><p class="small">${esc(p.bestAsk)}</p></div></div>
+    <h4>Steps</h4><ol class="steps small">${(p.approach || []).map((s) => `<li><b>${esc(s.when)}:</b> ${esc(s.step)}${s.detail ? `<div class="muted">${esc(s.detail)}</div>` : ""}</li>`).join("")}</ol>
+    <div class="field"><label>Opening message · <span class="hint">${esc(p.openingMessage?.channel || "")} · edit before sending</span></label>${counted(`id="lpMsg-${l.id}" data-plan-msg="${l.id}"`, p.openingMessage?.text || "", lim)}
+      <div class="row end"><button class="btn small" data-copy-from="#lpMsg-${l.id}">Copy</button><button class="btn small" data-la="sent">I sent this</button></div></div>
+    <div class="field"><label>Follow-up if there's no reply</label>${counted(`id="lpFu-${l.id}" data-plan-fu="${l.id}" style="min-height:70px"`, p.followUp || "")}<div class="row end"><button class="btn small" data-copy-from="#lpFu-${l.id}">Copy</button></div></div>
+    <div class="grid cols-3"><div><h4>Talking points</h4>${list(p.talkingPoints)}</div><div><h4>Risks</h4>${list(p.risks)}</div><div><h4>Don't</h4>${list(p.doNot)}</div></div>
+  </details>`;
+}
+
+function leadCardHTML(l) {
+  const q = leadQ(l);
+  const due = isLeadDue(l);
+  const rate = (v, label) => `<button type="button" class="rate ${v}" data-la="rate:${v}" aria-pressed="${l.rating === v}" title="${RATING_LABEL[v]}">${label}</button>`;
+  return `<article class="card job lead ${l.rating === "not" ? "dim" : ""}" data-lead="${esc(l.id)}">
+    <div><h3>${esc(l.name)}${l.url ? ` <a class="small" href="${esc(l.url)}" target="_blank" rel="noopener" aria-label="Open profile">↗</a>` : ""}</h3>
+      <div class="meta"><span>${esc([l.title, l.company].filter(Boolean).join(" · ") || "No title or company yet")}</span></div>
+      <div class="row" style="margin-top:6px;gap:6px"><span class="badge ${LEAD_STATUS_CLASS[l.status] || ""}">${esc(LEAD_STATUS_LABEL[l.status] || l.status)}</span><span class="badge">${esc(l.relationship || "Relationship not set")}</span>${q.roleType && q.roleType !== "other" ? `<span class="badge info">${esc(q.roleType)}</span>` : ""}${(q.jobs || []).map((j) => `<span class="badge ${["applied", "interviewing", "offer"].includes(j.status) ? "good" : "accent"}" title="A job you're pursuing at their company">${esc(j.title)} · ${esc(j.status)}</span>`).join("")}${(l.tags || []).map((t) => `<span class="badge">${esc(t)}</span>`).join("")}</div>
+    </div>
+    <div class="side">${scoreRing(q.score, true)}<span class="small muted">${esc(q.tier)} quality</span></div>
+    <div class="full small"><span class="muted">Why: ${esc((q.reasons || []).join(" · ") || "add a title, company and relationship to score this lead")}</span>${l.notes ? `<div class="notes">${esc(l.notes)}</div>` : ""}</div>
+    <div class="full next ${due ? "due" : ""}"><b>${due ? "Due" : "Next"}:</b> ${l.nextAction ? `${esc(l.nextAction)}${l.nextActionAt ? ` <span class="muted">· by ${fmtDate(l.nextActionAt)}</span>` : ""}` : esc(q.nextStep || "")}${l.nextAction && q.nextStep ? `<div class="small muted">Suggested: ${esc(q.nextStep)}</div>` : ""}</div>
+    <div class="full row" style="gap:6px">
+      <div class="rates" role="group" aria-label="Rate this lead">${rate("good", "Good")}${rate("maybe", "Maybe")}${rate("not", "Not a fit")}</div>
+      <select class="mini" data-lstatus aria-label="Status">${LEAD_STATUSES.map((s) => `<option value="${s}" ${l.status === s ? "selected" : ""}>${LEAD_STATUS_LABEL[s]}</option>`).join("")}</select>
+      <span class="grow"></span>
+      <button class="btn small" data-la="log">Log contact</button>
+      <button class="btn small" data-la="draft">Draft message</button>
+      <button class="btn small" data-la="plan"><span class="ai-dot"></span>${l.plan ? "Redo plan" : "Assess & plan"}</button>
+      <button class="btn small ghost" data-la="edit">Edit</button>
+    </div>
+    ${leadPlanHTML(l)}
+  </article>`;
+}
+
+function filteredLeads() {
+  const f = S.ui.lf ||= { status: "", rating: "", text: "", sort: "quality", company: "" };
+  let ls = S.leads.items.filter((l) => (!f.status || (f.status === "active" ? !["dead", "dormant"].includes(l.status) : l.status === f.status)) && (!f.rating || (f.rating === "unrated" ? !l.rating : f.rating === "hide-not" ? l.rating !== "not" : l.rating === f.rating)) && (!f.company || leadQ(l).companyKey === f.company));
+  if (f.text) { const t = f.text.toLowerCase(); ls = ls.filter((l) => `${l.name} ${l.title} ${l.company} ${l.notes} ${(l.tags || []).join(" ")}`.toLowerCase().includes(t)); }
+  const by = { quality: (a, b) => leadQ(b).score - leadQ(a).score, due: (a, b) => (a.nextActionAt || "9999").localeCompare(b.nextActionAt || "9999"), recent: (a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""), name: (a, b) => a.name.localeCompare(b.name), company: (a, b) => (a.company || "~").localeCompare(b.company || "~") };
+  return [...ls].sort(by[f.sort] || by.quality);
+}
+
+function leadsTabHTML() {
+  const st = S.net.stats, f = S.ui.lf ||= { status: "", rating: "", text: "", sort: "quality", company: "" };
+  const shown = filteredLeads();
+  const coName = f.company ? S.net.companies.find((c) => c.key === f.company)?.name : "";
+  return `<div class="grid cols-4">
+      <div class="card"><div class="stat">${st.leads}</div><div class="stat-label">Leads</div></div>
+      <div class="card"><div class="stat">${st.high}</div><div class="stat-label">High quality</div></div>
+      <div class="card"><div class="stat" style="color:${st.due ? "var(--bad)" : "inherit"}">${st.due}</div><div class="stat-label">Actions due</div></div>
+      <div class="card"><div class="stat">${st.talking}</div><div class="stat-label">In conversation · ${st.waiting} awaiting reply</div></div>
+    </div>
+    <div class="card toolbar" style="margin-top:14px"><div class="row">
+      <input type="search" id="lfText" placeholder="Search name, company, notes…" value="${esc(f.text)}" style="max-width:260px">
+      <select id="lfStatus" class="mini" aria-label="Status"><option value="">Any status</option><option value="active" ${f.status === "active" ? "selected" : ""}>Active (not dead or quiet)</option>${LEAD_STATUSES.map((s) => `<option value="${s}" ${f.status === s ? "selected" : ""}>${LEAD_STATUS_LABEL[s]}</option>`).join("")}</select>
+      <select id="lfRating" class="mini" aria-label="Rating"><option value="">Any rating</option>${[["good", "Good leads"], ["maybe", "Maybe"], ["not", "Not a fit"], ["unrated", "Not rated yet"], ["hide-not", "Hide “not a fit”"]].map(([v, l]) => `<option value="${v}" ${f.rating === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+      <select id="lfSort" class="mini" aria-label="Sort">${[["quality", "Best quality first"], ["due", "Next action date"], ["recent", "Recently added"], ["company", "Company"], ["name", "Name"]].map(([v, l]) => `<option value="${v}" ${f.sort === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+      ${coName ? `<span class="chip">At ${esc(coName)}<button id="lfCoClear" aria-label="Clear company filter">✕</button></span>` : ""}
+      <span class="grow"></span><button class="btn small" id="leadCsv">Export CSV</button><button class="btn primary small" id="leadAdd">+ Add lead</button>
+    </div></div>
+    <div style="margin-top:14px">${slotHTML("leadplan")}</div>
+    ${!S.leads.items.length ? `<div class="card empty">No leads yet. Add people you know by hand, or import your LinkedIn connections and Career Copilot will pick out the ones at companies you're pursuing.<div class="row" style="justify-content:center;margin-top:12px"><button class="btn primary" data-nt="connections">Find leads in my LinkedIn connections</button></div></div>`
+      : shown.length ? `<div class="stack" id="leadList">${shown.map(leadCardHTML).join("")}</div>` : `<div class="card empty">No leads match these filters.</div>`}
+    <p class="small muted" style="margin-top:12px">Quality (0–100) adds up four things: how warm the relationship is, whether they're at a company you're pursuing, how much say they have in hiring, and whether the conversation is moving. Your rating adjusts it; “Not a fit” caps it. “Assess & plan” gets a second opinion from the AI.</p>`;
+}
+
+function bindLeadsTab(main) {
+  const f = S.ui.lf;
+  const redrawList = () => { const box = $("#leadList", main); const shown = filteredLeads(); if (box) { box.innerHTML = shown.map(leadCardHTML).join("") || `<div class="card empty">No leads match these filters.</div>`; initCounters(box); } else rerender(); };
+  $("#lfText", main)?.addEventListener("input", debounce((e) => { f.text = e.target.value; redrawList(); }, 200));
+  for (const [id, k] of [["lfStatus", "status"], ["lfRating", "rating"], ["lfSort", "sort"]]) $(`#${id}`, main)?.addEventListener("change", (e) => { f[k] = e.target.value; rerender(); });
+  $("#lfCoClear", main)?.addEventListener("click", () => { f.company = ""; rerender(); });
+  $("#leadAdd", main).addEventListener("click", () => editLead());
+  $("#leadCsv", main).addEventListener("click", () => {
+    const cols = ["name", "title", "company", "relationship", "status", "rating", "quality", "url", "email", "howKnow", "nextAction", "nextActionAt", "lastContactAt", "notes"];
+    const qv = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    download(`leads-${today()}.csv`, [cols.join(","), ...S.leads.items.map((l) => cols.map((c) => qv(c === "quality" ? leadQ(l).score : l[c])).join(","))].join("\n"), "text/csv");
+  });
+  main.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-la]");
+    if (!b) return;
+    const lead = S.leads.items.find((x) => x.id === b.closest("[data-lead]")?.dataset.lead);
+    if (!lead) return;
+    const a = b.dataset.la;
+    if (a.startsWith("rate:")) {
+      const v = a.slice(5);
+      lead.rating = lead.rating === v ? "" : v;
+      commitLeads();
+    }
+    if (a === "edit") editLead(lead);
+    if (a === "log") logContactDialog(lead);
+    if (a === "sent") logContactDialog(lead, "sent", "Sent the opening message from the plan");
+    if (a === "draft") draftForLead(lead);
+    if (a === "plan") { runLeadPlan(lead); window.scrollTo({ top: 0, behavior: "smooth" }); }
+  });
+  main.addEventListener("change", (e) => {
+    const sel = e.target.closest("[data-lstatus]");
+    if (!sel) return;
+    const lead = S.leads.items.find((x) => x.id === sel.closest("[data-lead]")?.dataset.lead);
+    if (!lead) return;
+    lead.status = sel.value;
+    commitLeads();
+  });
+  // Edits to a plan's messages are kept with the lead.
+  main.addEventListener("input", debounce((e) => {
+    const id = e.target.dataset?.planMsg || e.target.dataset?.planFu;
+    const lead = id && S.leads.items.find((x) => x.id === id);
+    if (!lead?.plan) return;
+    if (e.target.dataset.planMsg) lead.plan.openingMessage.text = e.target.value;
+    else lead.plan.followUp = e.target.value;
+    save("leads");
+  }, 300));
+  main.addEventListener("toggle", (e) => { if (e.target.matches?.("details.plan")) S.ui.openPlan = e.target.open ? e.target.closest("[data-lead]").dataset.lead : null; }, true);
+}
+slots.leadplan = { render: () => "" };
+
+// ----- LinkedIn connections -----
+function leadFromConnection(c) {
+  const ai = S.net.ai?.byId?.[c.id];
+  return addLead({
+    name: c.name, title: c.position, company: c.company, url: c.url, email: c.email, relationship: "LinkedIn connection", source: "linkedin",
+    howKnow: c.connectedOn ? `Connected on LinkedIn since ${fmtDate(c.connectedOn)}` : "LinkedIn connection",
+    notes: ai ? [ai.why, ai.angle && `Angle: ${ai.angle}`].filter(Boolean).join(" ") : "",
+  });
+}
+
+const AI_TIER_CLASS = { A: "good", B: "accent", C: "", skip: "bad" };
+function connectionRowHTML(c) {
+  const ai = S.net.ai?.byId?.[c.id];
+  return `<li class="conn ${c.dismissed ? "dim" : ""}" data-conn="${esc(c.id)}"><div class="row" style="flex-wrap:nowrap;align-items:flex-start">${scoreRing(c.score, true)}
+    <div class="grow"><b>${esc(c.name)}</b>${c.url ? ` <a class="small" href="${esc(c.url)}" target="_blank" rel="noopener" aria-label="Open LinkedIn profile">↗</a>` : ""}
+      <div class="small">${esc([c.position, c.company].filter(Boolean).join(" · ") || "No title or company in the export")}</div>
+      <div class="row" style="gap:6px;margin-top:4px">${c.tags.map((t) => `<span class="badge ${t === "target company" ? "good" : "info"}">${esc(t)}</span>`).join("")}${ai ? `<span class="badge ${AI_TIER_CLASS[ai.tier] || ""}" title="AI ranking">AI: ${ai.tier === "skip" ? "skip" : `tier ${esc(ai.tier)}`}</span>` : ""}</div>
+      ${c.reasons.length ? `<div class="small muted" style="margin-top:4px">${esc(c.reasons.join(" · "))}</div>` : ""}
+      ${ai ? `<div class="small" style="margin-top:4px">${esc(ai.why)}${ai.angle ? ` <span class="muted">Angle: ${esc(ai.angle)}</span>` : ""}</div>` : ""}</div>
+    <div class="row" style="gap:6px;flex-wrap:nowrap">${c.isLead ? `<span class="badge good">Lead ✓</span>` : `<button class="btn small primary" data-ca="add">Add as lead</button>`}${c.isLead ? "" : `<button class="btn small ghost" data-ca="${c.dismissed ? "restore" : "dismiss"}">${c.dismissed ? "Restore" : "Not relevant"}</button>`}</div>
+  </div></li>`;
+}
+
+function filteredConnections() {
+  const tag = S.ui.connTag || "";
+  let cs = S.net.suggestions.filter((c) => !tag || (tag === "new" ? !c.isLead : c.tags.includes(tag)));
+  if (S.net.ai?.byId) {
+    const rank = { A: 0, B: 1, C: 2, skip: 4 };
+    cs = [...cs].sort((a, b) => (rank[S.net.ai.byId[a.id]?.tier] ?? 3) - (rank[S.net.ai.byId[b.id]?.tier] ?? 3) || b.score - a.score);
+  }
+  return cs;
+}
+
+const LINKEDIN_STEPS = `<ol class="steps small"><li>On LinkedIn: <b>Me → Settings & Privacy → Data privacy → Get a copy of your data</b>.</li><li>Choose <b>“Want something in particular?”</b>, tick <b>Connections</b>, and press <b>Request archive</b>.</li><li>LinkedIn emails a download link, usually within 10 minutes. Unzip it and pick <b>Connections.csv</b> below.</li></ol>`;
+
+function connectionsTabHTML() {
+  const n = S.net.connectionCounts;
+  const importer = `<div class="field"><label>Connections.csv</label><input type="file" id="connFile" accept=".csv,text/csv"></div>
+    <details><summary class="small" style="cursor:pointer">Or paste the file's contents</summary><textarea id="connPaste" class="tall" style="margin-top:6px" placeholder="First Name,Last Name,URL,Email Address,Company,Position,Connected On"></textarea><div class="row" style="margin-top:6px"><button class="btn small" id="connPasteGo">Import pasted text</button></div></details>`;
+  const targets = `<div class="card"><h2>Companies you want into</h2><p class="small muted">Companies from your tracker, saved jobs and the job you're working on are included automatically (${S.net.companies.filter((c) => c.level !== "none").length} so far). Add others here, one per line or comma separated.</p>
+    <textarea id="netTargets" style="min-height:90px" placeholder="Buck, Duolingo, Hornet">${esc((S.leads.targets || []).join(", "))}</textarea></div>`;
+  if (!S.net.importedAt) {
+    return `<div class="split"><div class="stack"><div class="card"><h2>Find leads you already have</h2>
+      <p>Most people have a way into a company and don't know it. Import your LinkedIn connections and Career Copilot matches them against the companies you're applying to, your field, and your past employers.</p>
+      ${LINKEDIN_STEPS}${importer}
+      <p class="small muted" style="margin-top:10px">This uses LinkedIn's own export. Career Copilot never logs in to LinkedIn or scrapes it (that breaks LinkedIn's terms and gets accounts restricted). The file stays on this computer.</p></div></div>
+      <div class="stack">${targets}<div class="card"><h2>What gets flagged</h2><ul class="plain small"><li><b>Target company:</b> they work where you've applied, saved a job, or listed a target.</li><li><b>Same field:</b> their title matches your focus (${esc((activeFocus().roles || []).slice(0, 3).join(", "))}), so they can vouch or know who's hiring.</li><li><b>Hiring manager:</b> a lead, manager or director in your field.</li><li><b>Recruiter:</b> talent and recruiting roles, weighted higher at target companies.</li><li><b>Past employer:</b> they now work somewhere you used to.</li></ul></div></div></div>`;
+  }
+  const cs = filteredConnections();
+  const strongNew = S.net.suggestions.filter((c) => c.tier === "strong" && !c.isLead && !c.dismissed);
+  const tagBtn = (v, l, count) => `<label><input type="radio" name="connTag" value="${v}" ${(S.ui.connTag || "") === v ? "checked" : ""}>${l}${count != null ? ` (${count})` : ""}</label>`;
+  return `<div class="notice info" style="margin-bottom:14px"><div class="grow"><b>${n.total.toLocaleString()} connections</b> imported ${ago(S.net.importedAt)}. <b>${n.atTargets}</b> at companies you're pursuing · <b>${n.sameField}</b> in your field · <b>${n.recruiters}</b> recruiters${n.dismissed ? ` · ${n.dismissed} marked not relevant` : ""}.</div><button class="btn small" id="connReimport">Re-import</button><button class="btn small ghost danger" id="connClear">Remove</button></div>
+    <div id="connImporter" hidden class="card" style="margin-bottom:14px"><h2>Import a newer export</h2>${LINKEDIN_STEPS}${importer}</div>
+    <div class="split"><div class="stack">${targets}
+      <div class="card"><h2>AI second opinion</h2><p class="small muted">Re-ranks your top matches with judgment about who can actually help, and suggests what to open with. Only first name, title and company are sent to ${esc(S.status.ai?.label || "the AI")}; no surnames, emails or profile links.</p>
+        <button class="btn" id="connRank"><span class="ai-dot"></span>${S.net.ai ? "Re-rank with AI" : "Rank my top matches with AI"}</button>
+        <div style="margin-top:10px">${slotHTML("rankconn")}</div>
+        ${S.net.ai?.summary ? `<p class="small" style="margin-top:10px">${esc(S.net.ai.summary)} <span class="muted">(${ago(S.net.ai.at)})</span></p>` : ""}</div></div>
+    <div class="card"><div class="card-head"><h2>Relevant connections</h2><span class="spacer"></span>${strongNew.length ? `<button class="btn small" id="connAddStrong">Add ${strongNew.length} strong match${strongNew.length > 1 ? "es" : ""} as leads</button>` : ""}</div>
+      <div class="row" style="margin-bottom:10px"><input type="search" id="connSearch" placeholder="Search all ${n.total.toLocaleString()} by name, company or title…" value="${esc(S.ui.connSearch || "")}" style="max-width:320px">
+        <div class="seg" role="radiogroup" aria-label="Filter">${tagBtn("", "All")}${tagBtn("target company", "Target companies", n.atTargets)}${tagBtn("same field", "My field", n.sameField)}${tagBtn("recruiter", "Recruiters", n.recruiters)}${tagBtn("new", "Not added yet")}</div></div>
+      ${cs.length ? `<ul class="list" id="connList">${cs.map(connectionRowHTML).join("")}</ul>` : `<p class="muted">${S.ui.connSearch ? "Nobody matches that search." : "No relevant connections found yet. Track or save some jobs, or add target companies on the left, and matches will appear."}</p>`}
+      ${!S.ui.connSearch && S.net.suggestions.length >= 150 ? `<p class="small muted" style="margin-top:8px">Showing the top 150. Search to find anyone else.</p>` : ""}</div></div>`;
+}
+
+async function importConnections(text) {
+  try {
+    const r = await api("POST", "/api/network/import", { csv: text });
+    S.ui.connSearch = "";
+    await refreshNet();
+    toast(`Imported ${r.count.toLocaleString()} connections`);
+    rerender();
+  } catch (e) { toast(e.message, "bad"); }
+}
+
+function bindConnectionsTab(main) {
+  $("#connFile", main)?.addEventListener("change", async (e) => { const f = e.target.files[0]; if (f) importConnections(await f.text()); });
+  $("#connPasteGo", main)?.addEventListener("click", () => { const t = $("#connPaste", main).value.trim(); if (t) importConnections(t); else toast("Paste the CSV text first.", "bad"); });
+  $("#connReimport", main)?.addEventListener("click", () => { const b = $("#connImporter", main); b.hidden = !b.hidden; });
+  $("#connClear", main)?.addEventListener("click", async () => {
+    if (!confirm("Remove the imported connections from this computer? Your leads stay.")) return;
+    await api("PUT", "/api/state/connections", { importedAt: null, items: [], ai: null });
+    await refreshNet();
+    rerender();
+  });
+  $("#netTargets", main)?.addEventListener("change", (e) => { S.leads.targets = csv(e.target.value); commitLeads(); });
+  $("#connSearch", main)?.addEventListener("input", debounce(async (e) => {
+    S.ui.connSearch = e.target.value.trim();
+    await refreshNet().catch((err) => toast(err.message, "bad"));
+    rerender();
+    const el = $("#connSearch");
+    if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+  }, 350));
+  main.addEventListener("change", (e) => { if (e.target.name === "connTag") { S.ui.connTag = e.target.value; rerender(); } });
+  $("#connRank", main)?.addEventListener("click", () => runAI("rankconn", "rankConnections", { job: jobForAI() }, { label: "Weighing who in your network can actually help…", expect: 45, onDone: async () => { await refreshNet(); if (currentRoute().id === "networking") rerender(); } }));
+  $("#connAddStrong", main)?.addEventListener("click", () => {
+    const add = S.net.suggestions.filter((c) => c.tier === "strong" && !c.isLead && !c.dismissed);
+    add.forEach(leadFromConnection);
+    toast(`Added ${add.length} lead${add.length > 1 ? "s" : ""}`);
+    commitLeads();
+  });
+  main.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-ca]");
+    if (!b) return;
+    const c = S.net.suggestions.find((x) => x.id === b.closest("[data-conn]").dataset.conn);
+    if (!c) return;
+    if (b.dataset.ca === "add") { leadFromConnection(c); toast(`${c.name} added to leads`); }
+    if (b.dataset.ca === "dismiss") S.leads.dismissed = [...new Set([...(S.leads.dismissed || []), c.id])];
+    if (b.dataset.ca === "restore") S.leads.dismissed = (S.leads.dismissed || []).filter((x) => x !== c.id);
+    commitLeads();
+  });
+}
+slots.rankconn = { render: (r) => `<div class="notice good small"><div class="grow">Ranked ${r.data.count} connections. They're sorted by AI tier in the list.</div></div>` };
+
+// ----- Company map -----
+const LEVEL_LABEL = { active: ["Applied", "good"], saved: ["Job saved", "accent"], target: ["Target", "info"], none: ["Not tracked", ""] };
+const COVERAGE_CLASS = { "in conversation": "good", "have leads": "accent", "connections not used yet": "warn", "no contacts": "bad" };
+
+function companiesTabHTML() {
+  const cos = S.net.companies;
+  if (!cos.length) return `<div class="card empty">Nothing to map yet. Track or save a job, add target companies, or add a lead, and each company shows up here with who you know there.</div>`;
+  const noContact = cos.filter((c) => c.level !== "none" && c.coverage === "no contacts").length;
+  return `<p class="muted" style="margin-top:0">Every company you're pursuing, next to who you know there. ${noContact ? `<b>${noContact}</b> ${noContact === 1 ? "has" : "have"} no contact yet.` : "You have a contact or a connection at each one."}</p>
+    <div class="grid cols-2">${cos.map((c) => {
+    const [ll, lc] = LEVEL_LABEL[c.level] || LEVEL_LABEL.none;
+    const job = c.jobs[0];
+    const find = `https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`${c.name} ${(activeFocus().roles || [])[0] || ""}`.trim())}`;
+    return `<div class="card co" data-co="${esc(c.key)}"><div class="card-head"><h3>${esc(c.name)}</h3><span class="badge ${lc}">${ll}</span><span class="badge ${COVERAGE_CLASS[c.coverage] || ""}">${esc(c.coverage)}</span></div>
+      ${c.jobs.length ? `<div class="small"><b>Jobs:</b> ${c.jobs.map((j) => `${esc(j.title || "role")} <span class="muted">(${esc(j.status)}${j.appliedAt ? ` ${fmtDate(j.appliedAt)}` : ""})</span>`).join(" · ")}</div>` : ""}
+      ${c.leads.length ? `<div class="small" style="margin-top:6px"><b>Leads:</b> ${c.leads.map((l) => `${esc(l.name)} <span class="muted">(${esc(LEAD_STATUS_LABEL[l.status] || l.status)}, ${l.score})</span>`).join(" · ")} <a href="#" data-coa="leads">view</a></div>` : ""}
+      ${c.connectionCount ? `<div class="small" style="margin-top:6px"><b>Connections not used yet (${c.connectionCount}):</b> ${c.connections.map((p) => `${esc(p.name)}${p.position ? ` <span class="muted">(${esc(p.position)})</span>` : ""}`).join(" · ")}${c.connectionCount > c.connections.length ? " …" : ""} <a href="#" data-coa="conns">see all</a></div>` : ""}
+      <div class="next" style="margin-top:10px"><b>Next move:</b> ${esc(c.nextMove)}</div>
+      <div class="row" style="gap:6px;margin-top:10px">${job ? `<button class="btn small" data-coa="referral"><span class="ai-dot"></span>Referral plan</button>` : ""}<a class="btn small" href="${esc(find)}" target="_blank" rel="noopener">Find people ↗</a><a class="btn small" href="#/companies?c=${encodeURIComponent(c.name)}">Company check</a><button class="btn small ghost" data-coa="add">+ Lead here</button></div></div>`;
+  }).join("")}</div>`;
+}
+
+function bindCompaniesTab(main) {
+  main.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-coa]");
+    if (!b) return;
+    e.preventDefault();
+    const c = S.net.companies.find((x) => x.key === b.closest("[data-co]").dataset.co);
+    if (!c) return;
+    const a = b.dataset.coa;
+    if (a === "add") editLead(null, { company: c.name });
+    if (a === "leads") { (S.ui.lf ||= { status: "", rating: "", text: "", sort: "quality", company: "" }).company = c.key; S.ui.netTab = "leads"; rerender(); }
+    if (a === "conns") { S.ui.connSearch = c.name; S.ui.connTag = ""; S.ui.netTab = "connections"; refreshNet().then(rerender); }
+    if (a === "referral") {
+      const j = c.jobs[0];
+      const src = j.source === "tracker" ? S.tracker.items.find((t) => t.id === j.id) : S.savedJobs.items.find((x) => x.id === j.id);
+      if (src) setWorkingJob(j.source === "tracker" ? { id: src.jobId, title: src.role, company: src.company, location: src.location, type: src.type, salary: src.salary, url: src.url, description: src.description } : src);
+      else if (S.ui.job.company !== c.name) setWorkingJob({ title: j.title, company: c.name });
+      S.ui.netTab = "referral";
+      rerender();
+    }
+  });
+}
+
+// ----- Overall plan -----
+slots.netplan = {
+  empty: () => `<div class="card empty">No plan yet. It works best once you have a few leads and at least one tracked job.</div>`,
+  render: (r) => {
+    const d = r.data;
+    return `<div class="card" id="netPlanSheet">${d.at ? `<p class="small muted" style="margin-top:0">Built ${ago(d.at)}. Rebuild it after you add leads or apply somewhere new.</p>` : ""}<p contenteditable="true">${esc(d.summary)}</p>
+      <h4>This week</h4><ul class="list">${(d.thisWeek || []).map((a) => `<li><div class="row"><b class="grow" contenteditable="true">${esc(a.action)}</b><span class="badge">${esc(a.when)}</span></div><div class="small">${esc([a.who, a.company].filter(Boolean).join(" · "))}</div><div class="small muted">${esc(a.why)}</div></li>`).join("")}</ul>
+      ${d.byCompany?.length ? `<h4 style="margin-top:12px">Path in, by company</h4><ul class="list">${d.byCompany.map((c) => `<li><b>${esc(c.company)}</b><div class="small" contenteditable="true">${esc(c.pathIn)}</div><div class="small"><b>Start with:</b> ${esc(c.firstContact)} · <b>Ask:</b> ${esc(c.ask)}</div><div class="small muted">If that goes quiet: ${esc(c.backup)}</div></li>`).join("")}</ul>` : ""}
+      ${d.gaps?.length ? `<h4 style="margin-top:12px">No way in yet</h4><ul class="list">${d.gaps.map((g) => `<li><b>${esc(g.company)}</b>: ${esc(g.problem)}<div class="small muted">${esc(g.howToFindPeople)}</div></li>`).join("")}</ul>` : ""}
+      ${d.leadsToDrop?.length ? `<h4 style="margin-top:12px">Leads to stop chasing</h4><ul class="plain small">${d.leadsToDrop.map((l) => `<li><b>${esc(l.who)}</b>: ${esc(l.why)}</li>`).join("")}</ul>` : ""}
+      <div class="grid cols-2" style="margin-top:12px"><div><h4>Weekly rhythm</h4><p class="small" contenteditable="true">${esc(d.cadence)}</p></div><div><h4>Watch for</h4>${editableList(d.watchFor)}</div></div>
+      <div class="row end"><button class="btn small" id="netPlanCopy">Copy</button><button class="btn small" id="netPlanPrint">Print</button></div></div>`;
+  },
+  bind: (el) => {
+    $("#netPlanCopy", el).addEventListener("click", () => copyText($("#netPlanSheet", el).innerText));
+    $("#netPlanPrint", el).addEventListener("click", () => printHTML(`<div class="letter">${esc($("#netPlanSheet", el).innerText)}</div>`));
+  },
+};
+
+const NET_TABS = [["leads", "Leads"], ["connections", "LinkedIn connections"], ["companies", "Company map"], ["strategy", "My plan"], ["referral", "Referral plan for a job"], ["outreach", "Outreach messages"]];
+
 view("networking", "Networking", (main) => {
-  const tab = S.ui.netTab || "plan";
+  const tab = NET_TABS.some(([t]) => t === S.ui.netTab) ? S.ui.netTab : "leads";
   const o = S.ui.outreach ||= { channel: "LinkedIn connection note", stage: "first contact", recipient: "", context: "", goal: "", company: "", jobTitle: "" };
-  main.innerHTML = `${pageHead("Referrals & networking", "Warm intros beat cold applications. Claude plans who to reach and drafts short, generous messages in your voice. Nothing is ever sent for you.")}
-  <div class="tabs" role="tablist"><button role="tab" aria-selected="${tab === "plan"}" data-nt="plan">Referral plan</button><button role="tab" aria-selected="${tab === "outreach"}" data-nt="outreach">Outreach messages</button></div>
-  ${tab === "plan" ? `<div class="split"><div class="card"><h2>For which job?</h2>${jobPickerHTML("net", { compact: true })}
-      <div class="field"><label>People you already know <span class="hint">schools, past employers, clients, communities</span></label><textarea id="netConn" placeholder="SCAD 2019; worked with Jen at Northwind; member of Motion Design Slack">${esc(S.ui.netConn || "")}</textarea></div>
+  const head = `${pageHead("Networking & leads", "Track who you know, see how they connect to the companies you're pursuing, and plan the approach. Nothing is ever sent for you.")}
+  <div class="tabs" role="tablist">${NET_TABS.map(([t, l]) => `<button role="tab" aria-selected="${tab === t}" data-nt="${t}">${l}${t === "leads" && S.net?.stats.due ? ` <span class="badge warn">${S.net.stats.due}</span>` : ""}</button>`).join("")}</div>`;
+  const needsNet = ["leads", "connections", "companies"].includes(tab);
+  if (needsNet && !S.net) {
+    main.innerHTML = `${head}<div class="loading"><div class="spinner"></div>Loading your network…</div>`;
+    refreshNet().then(() => { if (currentRoute().id === "networking") rerender(); }, (e) => { main.innerHTML = head + errorHTML(e); });
+    return;
+  }
+  const outLead = S.ui.outreachLeadId && S.leads.items.find((l) => l.id === S.ui.outreachLeadId);
+  const body = {
+    leads: () => leadsTabHTML(),
+    connections: () => connectionsTabHTML(),
+    companies: () => companiesTabHTML(),
+    strategy: () => `<div class="split"><div class="card"><h2>Plan across all your leads</h2><p class="small muted">Looks at every lead, the jobs you've tracked and where you have no contact yet, then lays out what to do this week, the path into each company, and which leads to stop chasing.</p>
+      <p class="small">${S.leads.items.length} lead${S.leads.items.length === 1 ? "" : "s"} · ${S.tracker.items.length} tracked job${S.tracker.items.length === 1 ? "" : "s"}</p>
+      <button class="btn primary" id="netPlanRun"><span class="ai-dot"></span>${S.leads.plan ? "Rebuild my plan" : "Build my networking plan"}</button></div><div>${slotHTML("netplan")}</div></div>`,
+    referral: () => `<div class="split"><div class="card"><h2>For which job?</h2>${jobPickerHTML("net", { compact: true })}
+      <div class="field"><label>Other people or links you have <span class="hint">schools, past employers, clients, communities</span></label><textarea id="netConn" placeholder="SCAD 2019; worked with Jen at Northwind; member of Motion Design Slack">${esc(S.ui.netConn || "")}</textarea></div>
+      <p class="small muted">Leads and LinkedIn connections you have at this company are included automatically.</p>
       <button class="btn primary" id="planRun"><span class="ai-dot"></span>Build my referral plan</button></div>
-    <div>${slotHTML("referral")}</div></div>` : `
-    <div class="split"><div class="card"><h2>Message</h2>
+    <div>${slotHTML("referral")}</div></div>`,
+    outreach: () => `<div class="split"><div class="card"><h2>Message</h2>
+      ${outLead ? `<div class="notice info small" style="margin-bottom:10px"><div class="grow">Writing to your lead <b>${esc(outLead.name)}</b>. Their details are filled in below.</div><button class="btn small ghost" id="oClearLead">Clear</button></div>` : ""}
       <div class="grid cols-2"><div class="field"><label>Channel</label><select id="oChannel">${CHANNELS.map(([c]) => `<option ${o.channel === c ? "selected" : ""}>${c}</option>`).join("")}</select></div>
       <div class="field"><label>Stage</label><select id="oStage">${["first contact", "follow-up (no reply)", "ask for a referral (after rapport)", "thank-you after a chat", "thank-you after interview", "check in with a recruiter"].map((s) => `<option ${o.stage === s ? "selected" : ""}>${s}</option>`).join("")}</select></div></div>
       <div class="field"><label>Who</label><input type="text" id="oRecipient" value="${esc(o.recipient)}" placeholder="Sam Lee, Motion Lead at Duolingo"></div>
@@ -1525,19 +2033,33 @@ view("networking", "Networking", (main) => {
       <div class="field"><label>Your goal</label><input type="text" id="oGoal" value="${esc(o.goal)}" placeholder="a 15-minute chat about the team"></div>
       <div class="grid cols-2"><div class="field"><label>Company</label><input type="text" id="oCompany" value="${esc(o.company || S.ui.job.company)}"></div><div class="field"><label>Related job</label><input type="text" id="oJob" value="${esc(o.jobTitle || S.ui.job.title)}"></div></div>
       <button class="btn primary" id="oRun"><span class="ai-dot"></span>Draft 3 versions</button></div>
-    <div>${slotHTML("outreach")}</div></div>`}`;
-  $$("[data-nt]", main).forEach((b) => b.addEventListener("click", () => { S.ui.netTab = b.dataset.nt; rerender(); }));
-  if (tab === "plan") {
+    <div>${slotHTML("outreach")}</div></div>`,
+  }[tab]();
+  main.innerHTML = head + body;
+  main.addEventListener("click", (e) => { const b = e.target.closest("[data-nt]"); if (b) { S.ui.netTab = b.dataset.nt; rerender(); } });
+  if (tab === "leads") bindLeadsTab(main);
+  if (tab === "connections") bindConnectionsTab(main);
+  if (tab === "companies") bindCompaniesTab(main);
+  if (tab === "strategy") {
+    if (!S.results.netplan && S.leads.plan) S.results.netplan = { data: S.leads.plan };
+    $("#netPlanRun").addEventListener("click", () => runAI("netplan", "networkPlan", { job: jobForAI() }, {
+      label: "Working out your best paths in…", expect: 60,
+      onDone: (r) => { r.data.at = new Date().toISOString(); S.leads.plan = r.data; save("leads"); },
+    }));
+  }
+  if (tab === "referral") {
     bindJobPicker(main);
     $("#netConn").addEventListener("input", (e) => (S.ui.netConn = e.target.value));
     $("#planRun").addEventListener("click", () => {
       if (!hasJob() && !S.ui.job.company) return toast("Add the job (or at least the company) first.", "bad");
       runAI("referral", "referralPlan", { job: jobForAI(), options: { connections: S.ui.netConn } }, { label: "Planning who to reach and how…", expect: 60 });
     });
-  } else {
+  }
+  if (tab === "outreach") {
     const map = { oChannel: "channel", oStage: "stage", oRecipient: "recipient", oContext: "context", oGoal: "goal", oCompany: "company", oJob: "jobTitle" };
     main.addEventListener("input", (e) => { if (map[e.target.id]) o[map[e.target.id]] = e.target.value; });
     main.addEventListener("change", (e) => { if (map[e.target.id]) o[map[e.target.id]] = e.target.value; });
+    $("#oClearLead")?.addEventListener("click", () => { S.ui.outreachLeadId = null; rerender(); });
     $("#oRun").addEventListener("click", () => runAI("outreach", "outreach", { options: { ...o } }, { label: "Drafting messages in your voice…", expect: 30, onDone: () => (S.ui.outreachChannel = o.channel) }));
   }
 });
@@ -1546,7 +2068,7 @@ slots.referral = {
   render: (r) => {
     const d = r.data;
     return `<div class="card"><p contenteditable="true">${esc(d.overview)}</p>
-      <h4>Who to reach</h4><ul class="list">${d.targets.map((t) => `<li><b contenteditable="true">${esc(t.who)}</b><div class="small" contenteditable="true">${esc(t.why)}</div><div class="small muted" contenteditable="true">${esc(t.howToFind)}</div></li>`).join("")}</ul>
+      <h4>Who to reach</h4><ul class="list">${d.targets.map((t, i) => `<li><div class="row"><b class="grow" contenteditable="true">${esc(t.who)}</b><button class="btn small ghost" data-ref-lead="${i}">+ Add as lead</button></div><div class="small" contenteditable="true">${esc(t.why)}</div><div class="small muted" contenteditable="true">${esc(t.howToFind)}</div></li>`).join("")}</ul>
       <h4 style="margin-top:12px">Searches to run</h4><ul class="list">${d.searchQueries.map((q) => { const href = searchLink(q); return `<li><div class="row"><span class="badge">${esc(q.where)}</span><code class="mono grow" style="word-break:break-all">${esc(q.query)}</code><button class="btn small ghost" data-copy="${esc(q.query)}">Copy</button>${href ? `<a class="btn small" href="${esc(href)}" target="_blank" rel="noopener">Open</a>` : ""}</div><div class="small muted">${esc(q.purpose)}</div></li>`; }).join("")}</ul>
       <div class="grid cols-2" style="margin-top:12px"><div><h4>Communities</h4><ul class="plain">${d.communities.map((c) => `<li><b>${esc(c.name)}</b>: <span contenteditable="true">${esc(c.how)}</span></li>`).join("")}</ul></div><div><h4>Give first</h4>${editableList(d.giveFirst)}</div></div>
       <h4 style="margin-top:12px">Messages <span class="hint">edit before sending</span></h4>
@@ -1556,6 +2078,13 @@ slots.referral = {
   },
   bind: (el, r) => {
     el.addEventListener("input", (e) => { const m = e.target.id?.match(/^refMsg(\d+)$/); if (m) r.data.messages[+m[1]].text = e.target.value; });
+    el.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-ref-lead]");
+      if (!b) return;
+      const t = r.data.targets[+b.dataset.refLead];
+      // The plan describes a kind of person ("the motion lead"); you fill in who it actually is.
+      editLead(null, { company: S.ui.job.company || "", title: t.who, notes: [t.why, t.howToFind && `How to find: ${t.howToFind}`].filter(Boolean).join("\n"), source: "referral plan" });
+    });
     $("#refSave", el).addEventListener("click", () => saveDocument("referral", `Referral plan: ${S.ui.job.company || S.ui.job.title}`, r.data));
   },
 };
@@ -1563,14 +2092,20 @@ slots.referral = {
 slots.outreach = {
   render: (r) => {
     const lim = channelLimit(S.ui.outreachChannel || "");
+    const lead = S.ui.outreachLeadId && S.leads.items.find((l) => l.id === S.ui.outreachLeadId);
     return `<div class="card">${r.data.variants.map((v, i) => `<div class="field"><label>${esc(v.label)}</label>${counted(`id="outV${i}"`, v.text, lim)}
-      <div class="row end"><span class="small muted grow" data-tells="${i}"></span><button class="btn small" data-copy-from="#outV${i}">Copy</button></div></div>`).join("")}
+      <div class="row end"><span class="small muted grow" data-tells="${i}"></span><button class="btn small" data-copy-from="#outV${i}">Copy</button>${lead ? `<button class="btn small" data-sent="${i}">I sent this to ${esc(lead.name.split(" ")[0])}</button>` : ""}</div></div>`).join("")}
       ${r.data.tips?.length ? `<h4>Tips</h4>${list(r.data.tips)}` : ""}</div>`;
   },
   bind: (el, r) => {
     const tells = (i) => { const t = tellsIn($(`#outV${i}`, el).value); $(`[data-tells="${i}"]`, el).textContent = t.length ? `Sounds generic: ${t.join(", ")}` : ""; };
     r.data.variants.forEach((_, i) => tells(i));
     el.addEventListener("input", (e) => { const m = e.target.id?.match(/^outV(\d+)$/); if (m) { r.data.variants[+m[1]].text = e.target.value; tells(+m[1]); } });
+    el.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-sent]");
+      const lead = b && S.leads.items.find((l) => l.id === S.ui.outreachLeadId);
+      if (lead) logContactDialog(lead, "sent", `${S.ui.outreachChannel || "Message"}: ${$(`#outV${b.dataset.sent}`, el).value.slice(0, 200)}`);
+    });
   },
 };
 
@@ -1712,6 +2247,13 @@ function addDays(n) {
   return d.toISOString().slice(0, 10);
 }
 
+// Leads you have at an application's company, shown inside the application.
+function peopleAtHTML(company) {
+  if (!coKey(company)) return "";
+  const people = leadsAt(company);
+  return `<div class="field"><label>Your leads here</label>${people.length ? `<div class="chips">${people.map((l) => `<span class="chip">${esc(l.name)} · ${esc(LEAD_STATUS_LABEL[l.status] || l.status)}</span>`).join("")}</div>` : `<div class="small muted">None yet.</div>`}<div class="small" style="margin-top:4px"><a href="#/networking" data-close>Open Networking</a> to add leads or check your LinkedIn connections at this company.</div></div>`;
+}
+
 function editApplication(t = null) {
   const isNew = !t;
   t = t ? clone(t) : { id: uid(), company: "", role: "", url: "", location: "", type: "", salary: "", status: "saved", savedAt: today(), appliedAt: "", followUpAt: "", contacts: "", notes: "", resumeId: "", coverId: "", description: "", history: [] };
@@ -1731,6 +2273,7 @@ function editApplication(t = null) {
     </div>
     <div class="field"><label>Contacts <span class="hint">recruiter, referrer, hiring manager</span></label><textarea name="contacts" style="min-height:60px">${esc(t.contacts)}</textarea></div>
     <div class="field"><label>Notes</label><textarea name="notes">${esc(t.notes)}</textarea></div>
+    ${peopleAtHTML(t.company)}
     <details><summary class="small" style="cursor:pointer">Job description</summary><textarea name="description" class="tall" style="margin-top:6px">${esc(t.description)}</textarea></details>
     ${t.history?.length ? `<p class="small muted" style="margin-top:10px">History: ${t.history.map((h) => `${STATUS_LABEL[h.status]} ${fmtDate(h.at)}`).join(" → ")}</p>` : ""}
   </div><div class="dlg-foot">${isNew ? "" : `<button type="button" class="btn ghost danger" data-delete>Delete</button><button type="button" class="btn ghost" data-use>Use this job in tools</button>`}<span class="grow"></span><button type="button" class="btn" data-close>Cancel</button><button class="btn primary" value="save">Save</button></div></form>`, {
@@ -1745,6 +2288,7 @@ function editApplication(t = null) {
         if (!confirm("Delete this application?")) return;
         S.tracker.items = S.tracker.items.filter((x) => x.id !== t.id);
         save("tracker");
+        S.net = null;
         dlg.close();
         rerender();
       });
@@ -1757,6 +2301,7 @@ function editApplication(t = null) {
         if (i >= 0) S.tracker.items[i] = t;
         else S.tracker.items.unshift(t);
         save("tracker");
+        S.net = null;
         rerender();
       });
     },
@@ -1765,26 +2310,44 @@ function editApplication(t = null) {
 }
 
 view("tracker", "Tracker", (main) => {
-  const items = S.tracker.items;
-  const due = items.filter(isFollowUpDue);
+  const allItems = S.tracker.items;
+  const tq = (S.ui.trackerSearch || "").toLowerCase();
+  const items = tq ? allItems.filter((t) => `${t.role} ${t.company} ${t.notes} ${t.contacts} ${t.location}`.toLowerCase().includes(tq)) : allItems;
+  const due = allItems.filter(isFollowUpDue);
   const mode = S.ui.trackerMode || "board";
-  main.innerHTML = `${pageHead("Applications", "Saved → applied → interviewing → offer. Keep dates, contacts, and which resume and letter you used.", `<button class="btn" id="csvBtn">Export CSV</button><button class="btn primary" id="addApp">+ Add</button>`)}
+  const sent = allItems.filter((t) => t.appliedAt || ["applied", "interviewing", "offer", "rejected", "ghosted"].includes(t.status));
+  const weekAgo = addDays(-7);
+  const heard = sent.filter((t) => ["interviewing", "offer", "rejected"].includes(t.status)).length;
+  const leadCount = (t) => leadsAt(t.company).length;
+  main.innerHTML = `${pageHead("Applications", "Every job you've applied to, from saved through offer. Keep dates, contacts, and which resume and letter you used.", `<button class="btn" id="csvBtn">Export CSV</button><button class="btn primary" id="addApp">+ Add</button>`)}
   ${due.length ? `<div class="notice warn" style="margin-bottom:14px"><div class="grow"><b>${due.length} follow-up${due.length > 1 ? "s" : ""} due:</b> ${due.map((t) => esc(`${t.role} @ ${t.company}`)).join(", ")}. A short, friendly check-in is normal about a week after applying.</div></div>` : ""}
-  <div class="tabs" role="tablist"><button role="tab" aria-selected="${mode === "board"}" data-tm="board">Board</button><button role="tab" aria-selected="${mode === "table"}" data-tm="table">Table</button></div>
-  ${!items.length ? `<div class="card empty">No applications yet. Add one, or press “Track” on any job.</div>` : mode === "board" ? `<div class="kanban">${STATUSES.map((s) => {
+  <div class="grid cols-4" style="margin-bottom:14px">
+    <div class="card"><div class="stat">${sent.length}</div><div class="stat-label">Applied in total</div></div>
+    <div class="card"><div class="stat">${sent.filter((t) => t.appliedAt && t.appliedAt >= weekAgo).length}</div><div class="stat-label">Applied in the last 7 days</div></div>
+    <div class="card"><div class="stat">${sent.filter((t) => t.status === "applied").length}</div><div class="stat-label">Waiting to hear back</div></div>
+    <div class="card"><div class="stat">${sent.length ? `${Math.round((heard / sent.length) * 100)}%` : "—"}</div><div class="stat-label">Heard back (${heard} of ${sent.length})</div></div>
+  </div>
+  <div class="row" style="margin-bottom:6px"><div class="tabs grow" role="tablist" style="margin-bottom:0"><button role="tab" aria-selected="${mode === "board"}" data-tm="board">Board</button><button role="tab" aria-selected="${mode === "table"}" data-tm="table">Table</button></div><input type="search" id="trackerSearch" placeholder="Search applications…" value="${esc(S.ui.trackerSearch || "")}" style="max-width:240px"></div>
+  ${!allItems.length ? `<div class="card empty">No applications yet. Add one, or press “I applied” or “Track” on any job.</div>` : !items.length ? `<div class="card empty">No applications match “${esc(S.ui.trackerSearch)}”.</div>` : mode === "board" ? `<div class="kanban">${STATUSES.map((s) => {
     const its = items.filter((t) => t.status === s);
-    return `<div class="lane"><h4><span>${STATUS_LABEL[s]}</span><span>${its.length}</span></h4>${its.map((t) => `<div class="app-card" data-app="${esc(t.id)}" tabindex="0" role="button"><b>${esc(t.role)}</b><div class="muted">${esc(t.company)}</div>
+    return `<div class="lane"><h4><span>${STATUS_LABEL[s]}</span><span>${its.length}</span></h4>${its.map((t) => `<div class="app-card" data-app="${esc(t.id)}" tabindex="0" role="button"><b>${esc(t.role)}</b><div class="muted">${esc(t.company)}</div>${leadCount(t) ? `<div class="small"><span class="badge accent">${leadCount(t)} lead${leadCount(t) > 1 ? "s" : ""} here</span></div>` : ""}
       ${t.appliedAt ? `<div class="small faint">Applied ${fmtDate(t.appliedAt)}</div>` : ""}${isFollowUpDue(t) ? `<div class="due">Follow up due</div>` : t.followUpAt && ["applied", "interviewing", "saved"].includes(t.status) ? `<div class="small faint">Follow up ${fmtDate(t.followUpAt)}</div>` : ""}</div>`).join("")}</div>`;
-  }).join("")}</div>` : `<div class="card table-wrap"><table><thead><tr><th>Role</th><th>Company</th><th>Status</th><th>Applied</th><th>Follow up</th><th>Type</th><th>Resume</th></tr></thead><tbody>
-    ${items.map((t) => `<tr data-app="${esc(t.id)}" style="cursor:pointer"><td><b>${esc(t.role)}</b></td><td>${esc(t.company)}</td><td>${STATUS_LABEL[t.status]}</td><td>${fmtDate(t.appliedAt)}</td><td ${isFollowUpDue(t) ? 'style="color:var(--bad);font-weight:600"' : ""}>${fmtDate(t.followUpAt)}</td><td>${esc(t.type)}</td><td class="small">${esc(resumeById(t.resumeId)?.name || "")}</td></tr>`).join("")}</tbody></table></div>`}`;
+  }).join("")}</div>` : `<div class="card table-wrap"><table><thead><tr><th>Role</th><th>Company</th><th>Status</th><th>Applied</th><th>Follow up</th><th>Type</th><th>Leads</th><th>Resume</th></tr></thead><tbody>
+    ${items.map((t) => `<tr data-app="${esc(t.id)}" style="cursor:pointer"><td><b>${esc(t.role)}</b></td><td>${esc(t.company)}</td><td>${STATUS_LABEL[t.status]}</td><td>${fmtDate(t.appliedAt)}</td><td ${isFollowUpDue(t) ? 'style="color:var(--bad);font-weight:600"' : ""}>${fmtDate(t.followUpAt)}</td><td>${esc(t.type)}</td><td>${leadCount(t) || ""}</td><td class="small">${esc(resumeById(t.resumeId)?.name || "")}</td></tr>`).join("")}</tbody></table></div>`}`;
   $("#addApp").addEventListener("click", () => editApplication());
+  $("#trackerSearch")?.addEventListener("input", debounce((e) => {
+    S.ui.trackerSearch = e.target.value;
+    rerender();
+    const el = $("#trackerSearch");
+    if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+  }, 250));
   $$("[data-tm]", main).forEach((b) => b.addEventListener("click", () => { S.ui.trackerMode = b.dataset.tm; rerender(); }));
   main.addEventListener("click", (e) => { const a = e.target.closest("[data-app]"); if (a) editApplication(S.tracker.items.find((x) => x.id === a.dataset.app)); });
   main.addEventListener("keydown", (e) => { const a = e.target.closest("[data-app]"); if (a && e.key === "Enter") editApplication(S.tracker.items.find((x) => x.id === a.dataset.app)); });
   $("#csvBtn").addEventListener("click", () => {
     const cols = ["company", "role", "status", "type", "salary", "appliedAt", "followUpAt", "url", "contacts", "notes"];
     const q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    download(`applications-${today()}.csv`, [cols.join(","), ...items.map((t) => cols.map((c) => q(t[c])).join(","))].join("\n"), "text/csv");
+    download(`applications-${today()}.csv`, [cols.join(","), ...allItems.map((t) => cols.map((c) => q(t[c])).join(","))].join("\n"), "text/csv");
   });
 });
 
@@ -1799,7 +2362,7 @@ view("settings", "Settings", async (main) => {
   main.innerHTML = `${pageHead("Settings", "Keys are stored only in data/settings.json on this computer and never shown back in full.")}
   <form id="setForm" class="stack" autocomplete="off">
     <div class="card"><h2>AI provider</h2>
-      <p class="small muted">Used for evaluation, tailoring, resume structuring, cover letters, outreach, referral plans and interview prep. Billed to your own account with that provider.</p>
+      <p class="small muted">Used for evaluation, tailoring, resume structuring, cover letters, outreach, lead assessment, networking plans and interview prep. Billed to your own account with that provider.</p>
       <div class="seg" role="radiogroup" aria-label="AI provider" style="margin-bottom:12px">${[["claude", "Claude (Anthropic)"], ["deepseek", "DeepSeek"]].map(([v, l]) => `<label><input type="radio" name="aiProvider" value="${v}" ${(s.aiProvider || "claude") === v ? "checked" : ""}>${l}</label>`).join("")}</div>
       <div data-prov="claude" ${(s.aiProvider || "claude") === "claude" ? "" : "hidden"}>
         ${keyField("anthropicApiKey", "Anthropic API key", "", "https://console.anthropic.com/settings/keys")}
@@ -1830,7 +2393,7 @@ view("settings", "Settings", async (main) => {
   </form>
   <div class="card" style="margin-top:14px"><h2>Job sources</h2><ul class="list">${(S.status.sources || []).map((x) => `<li class="row"><span class="badge ${x.active ? "good" : ""}">${x.active ? "active" : "off"}</span><b>${esc(x.name)}</b><span class="small muted grow">${esc(x.note)}</span></li>`).join("")}</ul></div>
   <div class="card" style="margin-top:14px"><h2>Appearance</h2><div class="seg" role="radiogroup">${["system", "light", "dark"].map((t) => `<label><input type="radio" name="theme" value="${t}" ${theme === t ? "checked" : ""}>${t[0].toUpperCase() + t.slice(1)}</label>`).join("")}</div></div>
-  <div class="card" style="margin-top:14px"><h2>Privacy</h2><p class="small">Your profile, resumes, letters, tracker and keys are saved as JSON files in the <code class="mono">data/</code> folder of this app, which git ignores. The server only listens on this computer. Text is sent to Anthropic only when you press an AI button, and job searches call the job boards directly.</p></div>`;
+  <div class="card" style="margin-top:14px"><h2>Privacy</h2><p class="small">Your profile, resumes, letters, tracker, leads, imported LinkedIn connections and keys are saved as JSON files in the <code class="mono">data/</code> folder of this app, which git ignores. The server only listens on this computer. Text is sent to Anthropic only when you press an AI button, and job searches call the job boards directly.</p></div>`;
   const form = $("#setForm");
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
