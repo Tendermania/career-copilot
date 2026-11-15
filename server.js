@@ -11,13 +11,13 @@ import { searchJobs, verifyPosting, SOURCE_INFO, classifyType, flagsFor } from "
 import { parseUpload, resumeToDocx, coverLetterToDocx, resumeToText } from "./lib/files.js";
 import { tasks, aiStatus, requireAi } from "./lib/ai.js";
 import { COMPAT, fieldsFor, providerList } from "./lib/providers.js";
+import { APP_DIR, IS_SEA, embedded } from "./lib/paths.js";
 import { PRESETS, suggestFromText, toFocus } from "./lib/focus.js";
 import { searchHidden, aiToJobs, HIDDEN_SOURCES } from "./lib/hidden.js";
 
 loadDotEnv();
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const PUBLIC = path.join(here, "public");
+const PUBLIC = path.join(APP_DIR, "public");
 const PORT = Number(process.env.PORT) || 5317;
 const HOST = process.env.HOST || "127.0.0.1";
 const MAX_BODY = 25 * 1024 * 1024;
@@ -478,6 +478,12 @@ const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; cha
 function serveStatic(req, res, pathname) {
   let p = decodeURIComponent(pathname);
   if (p === "/") p = "/index.html";
+  if (IS_SEA) { // single-file build: pages are embedded in the executable
+    const name = p.replace(/^\//, "");
+    const data = embedded(name) || (!path.extname(p) ? embedded("index.html") : null);
+    if (!data) return send(res, 404, "Not found");
+    return send(res, 200, data, { "Content-Type": MIME[path.extname(embedded(name) ? name : "index.html")] || "application/octet-stream", "Cache-Control": "no-cache" });
+  }
   const file = path.normalize(path.join(PUBLIC, p));
   if (!file.startsWith(PUBLIC + path.sep)) return send(res, 403, "Forbidden");
   fs.readFile(file, (err, data) => {
@@ -525,7 +531,7 @@ server.requestTimeout = 15 * 60 * 1000;
 server.headersTimeout = 60 * 1000;
 // The portable launcher sets OPEN_BROWSER=1 so a double-click opens the app.
 function openBrowser(url) {
-  if (process.env.OPEN_BROWSER !== "1") return;
+  if (process.env.OPEN_BROWSER !== "1" && !(IS_SEA && process.env.NO_OPEN !== "1")) return; // the .exe opens your browser itself
   const [cmd, args] = process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : process.platform === "darwin" ? ["open", [url]] : ["xdg-open", [url]];
   try {
     spawn(cmd, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();

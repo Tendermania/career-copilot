@@ -18,6 +18,11 @@ browser UI. Built for motion designers first, and works for any field.
   Expired and old postings are dropped and duplicates merged. Each job shows its type
   (full-time, contract, freelance…), pay, fit score and red flags. A "Verify still open"
   check is built in.
+- **Hidden opportunities** (Jobs → Hidden opportunities): the openings job boards never show you. Reads public
+  hiring posts on Reddit, Hacker News "Who is hiring?" and "Seeking freelancer?" threads, and Mastodon
+  hashtags, ranks them against your active focus, flags unpaid or exposure-only asks, and lets you track or
+  write outreach for them like any other job. An optional **AI web hunt** (Claude API key) searches the open web
+  for obscure postings (forums, social posts, studio "freelancers wanted" pages, niche newsletters).
 - **Company check**: ratings with links, contractor experience, pay, interview process,
   news and red flags (cached for 14 days).
 - **Networking**: referral plan (who to reach, LinkedIn and Google X-ray searches,
@@ -28,6 +33,10 @@ browser UI. Built for motion designers first, and works for any field.
 Every AI output is editable, and nothing is ever sent for you. The AI has honesty rules: it
 won't invent experience. Where a number would help, it leaves a placeholder like
 `[# videos/month]` for you to fill in.
+
+## Single-file Windows app
+Run `scripts/build-exe.sh` to build `dist/CareerCopilot.exe`: one file with the app, its pages and every
+library inside. Double-click it; your browser opens. Your data is saved in a `data` folder next to the `.exe`.
 
 ## Setup
 
