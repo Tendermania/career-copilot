@@ -90,7 +90,7 @@ const fileSafe = (s) => String(s || "document").replace(/[^\w.-]+/g, "-").replac
 const S = {
   status: { aiReady: false, ai: { provider: "claude", label: "Claude", webSearch: true }, sources: [], aiTells: [] },
   profile: null, resumes: { activeId: null, items: [] }, tracker: { items: [] }, savedJobs: { items: [] }, documents: { items: [] }, companies: {}, settings: null,
-  ui: { job: ls.get("job", { title: "", company: "", location: "", type: "", salary: "", url: "", description: "" }), resumeId: null, jobsTab: "results", lastSearch: ls.get("lastSearch", null) },
+  ui: { job: ls.get("job", { title: "", company: "", location: "", type: "", salary: "", url: "", description: "" }), resumeId: null, jobsTab: "results", lastHidden: ls.get("lastHidden", null), lastSearch: ls.get("lastSearch", null) },
   pending: {}, results: {}, errors: {},
 };
 const STORE_KEYS = { profile: "profile", resumes: "resumes", tracker: "tracker", savedJobs: "saved-jobs", documents: "documents" };
@@ -1310,7 +1310,7 @@ function jobCardHTML(j) {
   return `<article class="card job" data-job="${esc(j.id)}">
     <div><h3><a href="${esc(j.applyUrl || j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a></h3>
       <div class="meta"><b>${esc(j.company)}</b><span>${esc(j.location || "")}</span>${j.salary ? `<span>${esc(j.salary)}</span>` : ""}<span>${j.postedAt ? ago(j.postedAt) : esc(j.postedText || "date unknown")}</span></div>
-      <div class="row" style="margin-top:6px;gap:6px"><span class="badge ${typeClass}">${esc(j.type)}</span>${levelOf(j).id !== "unknown" ? `<span class="badge ${levelOf(j).rank >= 3 ? "warn" : "accent"}" title="${esc(levelOf(j).why)}">${esc(levelOf(j).label)}</span>` : ""}${j.remote ? '<span class="badge info">Remote</span>' : ""}<span class="badge">${esc(j.source)}${j.via ? ` · ${esc(j.via)}` : ""}</span>${(j.alsoOn || []).length ? `<span class="badge" title="Also listed on">also on ${esc(j.alsoOn.join(", "))}</span>` : ""}${vBadge}</div>
+      <div class="row" style="margin-top:6px;gap:6px"><span class="badge ${typeClass}">${esc(j.type)}</span>${levelOf(j).id !== "unknown" ? `<span class="badge ${levelOf(j).rank >= 3 ? "warn" : "accent"}" title="${esc(levelOf(j).why)}">${esc(levelOf(j).label)}</span>` : ""}${j.remote ? '<span class="badge info">Remote</span>' : ""}${j.hidden ? '<span class="badge accent" title="Found in a post or thread, not on a job board">Hidden find</span>' : ""}<span class="badge">${esc(j.source)}${j.via ? ` · ${esc(j.via)}` : ""}</span>${(j.alsoOn || []).length ? `<span class="badge" title="Also listed on">also on ${esc(j.alsoOn.join(", "))}</span>` : ""}${vBadge}</div>
     </div>
     <div class="side">${scoreRing(j.fit?.score ?? 0, true)}<span class="small muted">fit</span></div>
     <div class="full small">${(j.fit?.why || []).length ? `<span class="muted">Why: ${esc(j.fit.why.join(" · "))}</span>` : ""}${j.fit?.missingSkills?.length ? `<div class="muted">Skills they list that you haven't: ${esc(j.fit.missingSkills.slice(0, 6).join(", "))}</div>` : ""}</div>
@@ -1397,14 +1397,75 @@ function filteredJobs(all, { ignoreLevel = false } = {}) {
   return js;
 }
 
+// ================= Hidden opportunities =================
+// Posts and threads that never reach a job board: Reddit hiring posts, Hacker News "who is hiring" and
+// freelancer threads, Mastodon hashtags, plus an optional Claude web hunt.
+const HID_SOURCES = [["reddit", "Reddit", "hiring posts in r/forhire, r/DesignJobs and subreddits for your field"], ["hn", "Hacker News", "“Who is hiring?” and “Seeking freelancer?” threads"], ["mastodon", "Mastodon", "public #hiring and field hashtags"]];
+const hidDefaults = () => { const f = activeFocus(); return { queries: [...(f.roles || []).slice(0, 4), ...(f.keywords || []).slice(0, 4)].join(", "), maxAgeDays: 30, sources: ["reddit", "hn", "mastodon"], minFit: 0, text: "" }; };
+
+function hiddenHTML() {
+  const h = S.ui.hid ||= hidDefaults(); const web = S.status.ai?.webSearch && S.status.aiReady;
+  if (!S.results.hidden && S.ui.lastHidden) S.results.hidden = { ...S.ui.lastHidden, status: {}, restored: true };
+  return `<form class="card" id="hiddenForm">
+    <div class="notice info" style="margin-bottom:12px"><div class="grow"><b>The openings job boards never show you.</b> This reads public posts where people ask for help: Reddit hiring threads, Hacker News “who is hiring” and freelancer threads, and Mastodon hashtags. Matches are ranked against your active focus. Treat posts as leads to reach out to, not formal applications.</div></div>
+    <div class="grid cols-3">
+      <div class="field" style="grid-column:span 2"><label>Looking for <span class="hint">comma-separated; from your active focus</span></label><input type="text" name="queries" value="${esc(h.queries)}"></div>
+      <div class="field"><label>Posted within</label><select name="maxAgeDays">${[7, 14, 30, 60].map((d) => `<option value="${d}" ${+h.maxAgeDays === d ? "selected" : ""}>${d} days</option>`).join("")}</select></div>
+    </div>
+    <div class="row" style="margin-bottom:6px">${HID_SOURCES.map(([id, n, note]) => `<label class="check" title="${esc(note)}"><input type="checkbox" name="sources" value="${id}" ${h.sources.includes(id) ? "checked" : ""}>${n}</label>`).join("")}
+      <label class="check" title="${web ? "Claude searches the open web for obscure postings: forums, social posts, studio pages, newsletters. Takes 1-2 minutes and uses API credits." : "Needs a Claude API key (other providers can't search the web)."}" style="${web ? "" : "opacity:.55"}"><input type="checkbox" name="sources" value="ai" ${h.sources.includes("ai") && web ? "checked" : ""} ${web ? "" : "disabled"}>✨ AI web hunt <span class="hint">${web ? "(Claude)" : "(needs Claude key)"}</span></label></div>
+    <div class="row" style="margin-top:12px"><button class="btn primary" type="submit">Hunt for hidden opportunities</button><button class="btn ghost" type="button" id="hidReset">Reset to focus</button></div>
+  </form>
+  <div style="margin-top:14px">${slotHTML("hidden")}</div>`;
+}
+
+async function runHidden() {
+  const h = S.ui.hid, key = "hidden"; if (S.pending[key]) return;
+  const ctrl = new AbortController(); const ai = h.sources.includes("ai");
+  S.pending[key] = { label: ai ? "Reading Reddit, Hacker News and Mastodon, and Claude is searching the open web…" : "Reading Reddit, Hacker News and Mastodon…", expect: ai ? 90 : 20, t0: Date.now(), ctrl };
+  delete S.errors[key]; refreshSlot(key); updateNavBusy();
+  try {
+    const r = await api("POST", "/api/hidden/search", { queries: csv(h.queries), maxAgeDays: Number(h.maxAgeDays), sources: h.sources }, { signal: ctrl.signal });
+    S.results.hidden = r; S.ui.lastHidden = { at: r.at, jobs: r.jobs.slice(0, 100).map((j) => ({ ...j, description: j.description.slice(0, 1500) })) }; ls.set("lastHidden", S.ui.lastHidden);
+  } catch (e) { if (e.name !== "AbortError") S.errors[key] = e; } finally { delete S.pending[key]; refreshSlot(key); updateNavBusy(); }
+}
+
+function bindHidden(main) {
+  const h = S.ui.hid, form = $("#hiddenForm", main);
+  form.addEventListener("change", () => { const fd = new FormData(form); Object.assign(h, { queries: fd.get("queries"), maxAgeDays: fd.get("maxAgeDays"), sources: fd.getAll("sources") }); });
+  form.addEventListener("input", (e) => { if (e.target.name === "queries") h.queries = e.target.value; });
+  form.addEventListener("submit", (e) => { e.preventDefault(); form.dispatchEvent(new Event("change")); if (!h.sources.length) return toast("Pick at least one source.", "bad"); runHidden(); });
+  $("#hidReset").addEventListener("click", () => { S.ui.hid = hidDefaults(); rerender(); });
+}
+
+slots.hidden = {
+  empty: () => `<div class="card empty">Hunt to see openings from posts and threads. Reddit, Hacker News and Mastodon work without any keys.</div>`,
+  render: (r) => {
+    const h = S.ui.hid ||= hidDefaults(); const st = Object.entries(r.status || {}); const names = { reddit: "Reddit", hn: "Hacker News", mastodon: "Mastodon", ai: "AI web hunt" };
+    return `<div class="card"><div class="row small" style="margin-bottom:8px"><b>${r.jobs.length} hidden opportunities</b><span class="muted">${r.restored ? `from your last hunt (${ago(r.at)}). Hunt again for fresh posts.` : `found just now`}</span><span class="grow"></span><button class="btn small ghost" id="hidClear">Clear</button></div>
+      ${st.length ? `<div class="chips" style="margin-bottom:10px">${st.map(([id, s]) => `<span class="chip ${s.ok ? "" : "bad"}" title="${esc(s.error || "")}">${esc(names[id] || id)}: ${s.ok ? s.count : "failed"}</span>`).join("")}</div>` : ""}
+      ${st.some(([, s]) => s.error) ? `<p class="small muted">${st.filter(([, s]) => s.error).map(([id, s]) => `${esc(names[id] || id)}: ${esc(s.error)}`).join(" · ")}</p>` : ""}
+      <div class="grid cols-3"><div class="field"><label>Minimum fit: <span id="hMinV">${h.minFit}</span></label><input type="range" min="0" max="90" step="5" value="${h.minFit}" id="hMin" style="width:100%"></div><div class="field" style="grid-column:span 2"><label>Filter text</label><input type="search" id="hText" value="${esc(h.text)}" placeholder="e.g. explainer, $, remote"></div></div>
+      <div class="small muted" id="hCount"></div></div><div id="hList" style="margin-top:12px"></div>`;
+  },
+  bind: (el, r) => {
+    const h = S.ui.hid ||= hidDefaults();
+    const draw = () => { const t = (h.text || "").toLowerCase(); const js = r.jobs.filter((j) => (j.fit?.score ?? 0) >= h.minFit && (!t || `${j.title} ${j.company} ${j.description}`.toLowerCase().includes(t))); $("#hCount", el).textContent = `Showing ${Math.min(js.length, 100)} of ${js.length}`; $("#hList", el).innerHTML = js.length ? js.slice(0, 100).map(jobCardHTML).join("") : `<div class="card empty">Nothing matches. Try a lower minimum fit, a wider "posted within", or different words.</div>`; };
+    $("#hMin", el).addEventListener("input", (e) => { h.minFit = Number(e.target.value); $("#hMinV", el).textContent = e.target.value; draw(); });
+    $("#hText", el).addEventListener("input", (e) => { h.text = e.target.value; draw(); });
+    $("#hidClear", el).addEventListener("click", () => { delete S.results.hidden; S.ui.lastHidden = null; ls.set("lastHidden", null); refreshSlot("hidden"); });
+    draw();
+  },
+};
+
 view("jobs", "Jobs", (main, params) => {
   if (params.get("tab")) S.ui.jobsTab = params.get("tab");
   const f = S.ui.searchForm ||= searchDefaults();
   if (!S.results.jobs && S.ui.lastSearch) S.results.jobs = { ...S.ui.lastSearch, status: {}, dropped: {}, restored: true };
   const tab = S.ui.jobsTab;
   main.innerHTML = `${pageHead("Jobs", "Currently open postings from many boards. Expired and old postings are dropped, duplicates are merged, and each job shows its type, pay, fit and red flags.")}
-  <div class="tabs" role="tablist"><button role="tab" aria-selected="${tab !== "saved"}" data-jt="results">Search</button><button role="tab" aria-selected="${tab === "saved"}" data-jt="saved">Saved (${S.savedJobs.items.length})</button></div>
-  ${tab === "saved" ? `<div id="savedList">${S.savedJobs.items.length ? S.savedJobs.items.map(jobCardHTML).join("") : '<div class="card empty">No saved jobs yet.</div>'}</div>` : `
+  <div class="tabs" role="tablist"><button role="tab" aria-selected="${tab !== "saved" && tab !== "hidden"}" data-jt="results">Search</button><button role="tab" aria-selected="${tab === "hidden"}" data-jt="hidden">Hidden opportunities</button><button role="tab" aria-selected="${tab === "saved"}" data-jt="saved">Saved (${S.savedJobs.items.length})</button></div>
+  ${tab === "hidden" ? hiddenHTML() : tab === "saved" ? `<div id="savedList">${S.savedJobs.items.length ? S.savedJobs.items.map(jobCardHTML).join("") : '<div class="card empty">No saved jobs yet.</div>'}</div>` : `
   <form class="card" id="searchForm">
     <div class="grid cols-3">
       <div class="field" style="grid-column:span 2"><label>Search for <span class="hint">comma-separated; from your active focus</span></label><input type="text" name="queries" value="${esc(f.queries)}"></div>
@@ -1424,6 +1485,7 @@ view("jobs", "Jobs", (main, params) => {
 
   $$("[data-jt]", main).forEach((b) => b.addEventListener("click", () => { S.ui.jobsTab = b.dataset.jt; history.replaceState(null, "", "#/jobs"); rerender(); }));
   bindJobActions(main);
+  if (tab === "hidden") { bindHidden(main); return; }
   const form = $("#searchForm");
   if (!form) return;
   form.addEventListener("change", () => {
@@ -1932,6 +1994,7 @@ async function boot() {
     save("profile");
     S.ui.searchForm = null;
     S.ui.jf = null;
+    S.ui.hid = null;
     toast(`Focus: ${activeFocus().label}. Job search, ATS keywords and examples now follow it.`);
     rerender();
   });

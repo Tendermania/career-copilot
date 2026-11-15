@@ -12,6 +12,7 @@ import { parseUpload, resumeToDocx, coverLetterToDocx, resumeToText } from "./li
 import { tasks, aiStatus, requireAi } from "./lib/ai.js";
 import { COMPAT, fieldsFor, providerList } from "./lib/providers.js";
 import { PRESETS, suggestFromText, toFocus } from "./lib/focus.js";
+import { searchHidden, aiToJobs, HIDDEN_SOURCES } from "./lib/hidden.js";
 
 loadDotEnv();
 
@@ -324,6 +325,32 @@ route("POST", /^\/api\/focuses\/suggest$/, async (req, m, body) => {
   }
 });
 route("GET", /^\/api\/focuses\/presets$/, () => ({ presets: PRESETS.map((p) => toFocus(p)) }));
+
+// Hidden opportunities: posts and threads that never reach job boards (Reddit, Hacker News, Mastodon, plus an optional Claude web hunt).
+route("POST", /^\/api\/hidden\/search$/, async (req, m, body) => {
+  const profile = read("profile", {});
+  const focus = activeFocus(profile);
+  const queries = body.queries?.length ? body.queries : [...(focus.roles || []).slice(0, 4), ...(focus.keywords || []).slice(0, 4)];
+  const days = Number(body.maxAgeDays) || 30;
+  const wanted = (body.sources || []).filter((x) => x !== "ai");
+  const r = await searchHidden({ queries, days, sources: wanted.length ? wanted : (body.sources?.includes("ai") ? [] : undefined), focus });
+  r.at = new Date().toISOString();
+  if ((body.sources || []).includes("ai")) {
+    const a = aiStatus();
+    if (!a.ready) r.status.ai = { ok: false, count: 0, error: "Add an AI key in Settings to use the web hunt." };
+    else if (!a.webSearch) r.status.ai = { ok: false, count: 0, error: `The web hunt searches the live web, which ${a.label}'s API can't do. Switch to Claude in Settings.` };
+    else {
+      try {
+        const ai = await tasks.hiddenOpps({ profile, queries, days });
+        const extra = aiToJobs(ai.data?.opportunities, r.wanted, focus);
+        const seen = new Set(r.jobs.map((j) => j.url)); const fresh = extra.filter((j) => !seen.has(j.url));
+        r.jobs = [...r.jobs, ...fresh].sort((x, y) => y.fit.score - x.fit.score); r.total = r.jobs.length; r.status.ai = { ok: true, count: fresh.length };
+      } catch (e) { r.status.ai = { ok: false, count: 0, error: String(e.message || e) }; }
+    }
+  }
+  return r;
+});
+route("GET", /^\/api\/hidden\/sources$/, () => ({ sources: HIDDEN_SOURCES }));
 
 route("POST", /^\/api\/ai\/(\w+)$/, async (req, m, body) => {
   const name = m[1];
