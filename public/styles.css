@@ -419,3 +419,8 @@ dialog .dlg-foot { padding: 12px 20px; border-top: 1px solid var(--border); disp
   body.nav-hidden main { margin: 0 auto; }
 }
 @media (min-width: 861px) { .scrim { display: none !important; } }
+
+@media screen {
+  /* breathing room between an info bar and whatever follows it */
+  .notice + *:not([hidden]) { margin-top: 14px; }
+}

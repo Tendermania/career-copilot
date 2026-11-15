@@ -1,3 +1,4 @@
+import { LEVELS, levelOf, passesLevel, maxLevelFromText } from "./level.js";
 // Career Copilot UI. Vanilla JS, no build step. All data lives on your machine
 // (the local server writes to ./data); nothing here talks to third parties.
 
@@ -1309,7 +1310,7 @@ function jobCardHTML(j) {
   return `<article class="card job" data-job="${esc(j.id)}">
     <div><h3><a href="${esc(j.applyUrl || j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a></h3>
       <div class="meta"><b>${esc(j.company)}</b><span>${esc(j.location || "")}</span>${j.salary ? `<span>${esc(j.salary)}</span>` : ""}<span>${j.postedAt ? ago(j.postedAt) : esc(j.postedText || "date unknown")}</span></div>
-      <div class="row" style="margin-top:6px;gap:6px"><span class="badge ${typeClass}">${esc(j.type)}</span>${j.remote ? '<span class="badge info">Remote</span>' : ""}<span class="badge">${esc(j.source)}${j.via ? ` · ${esc(j.via)}` : ""}</span>${(j.alsoOn || []).length ? `<span class="badge" title="Also listed on">also on ${esc(j.alsoOn.join(", "))}</span>` : ""}${vBadge}</div>
+      <div class="row" style="margin-top:6px;gap:6px"><span class="badge ${typeClass}">${esc(j.type)}</span>${levelOf(j).id !== "unknown" ? `<span class="badge ${levelOf(j).rank >= 3 ? "warn" : "accent"}" title="${esc(levelOf(j).why)}">${esc(levelOf(j).label)}</span>` : ""}${j.remote ? '<span class="badge info">Remote</span>' : ""}<span class="badge">${esc(j.source)}${j.via ? ` · ${esc(j.via)}` : ""}</span>${(j.alsoOn || []).length ? `<span class="badge" title="Also listed on">also on ${esc(j.alsoOn.join(", "))}</span>` : ""}${vBadge}</div>
     </div>
     <div class="side">${scoreRing(j.fit?.score ?? 0, true)}<span class="small muted">fit</span></div>
     <div class="full small">${(j.fit?.why || []).length ? `<span class="muted">Why: ${esc(j.fit.why.join(" · "))}</span>` : ""}${j.fit?.missingSkills?.length ? `<div class="muted">Skills they list that you haven't: ${esc(j.fit.missingSkills.slice(0, 6).join(", "))}</div>` : ""}</div>
@@ -1386,9 +1387,11 @@ function bindJobActions(root) {
   });
 }
 
-function filteredJobs(all) {
-  const f = S.ui.jf ||= { type: "", remote: "", source: "", minFit: 0, within: 0, text: "", sort: "fit" };
-  let js = all.filter((j) => (!f.type || j.type === f.type) && (!f.remote || (f.remote === "remote" ? j.remote : !j.remote)) && (!f.source || j.source === f.source) && (j.fit?.score ?? 0) >= f.minFit && (!f.within || !j.postedAt || Date.now() - new Date(j.postedAt).getTime() <= f.within * 86400000));
+const jfDefaults = () => ({ type: "", remote: "", source: "", minFit: 0, within: 0, text: "", sort: "fit", maxLevel: maxLevelFromText(activeFocus().seniority), hideIntern: false, showUnknown: true });
+
+function filteredJobs(all, { ignoreLevel = false } = {}) {
+  const f = S.ui.jf ||= jfDefaults();
+  let js = all.filter((j) => (!f.type || j.type === f.type) && (!f.remote || (f.remote === "remote" ? j.remote : !j.remote)) && (!f.source || j.source === f.source) && (j.fit?.score ?? 0) >= f.minFit && (!f.within || !j.postedAt || Date.now() - new Date(j.postedAt).getTime() <= f.within * 86400000) && (ignoreLevel || passesLevel(j, f)));
   if (f.text) { const t = f.text.toLowerCase(); js = js.filter((j) => `${j.title} ${j.company} ${j.location} ${j.description}`.toLowerCase().includes(t)); }
   if (f.sort === "new") js = [...js].sort((a, b) => new Date(b.postedAt || 0) - new Date(a.postedAt || 0));
   return js;
@@ -1435,7 +1438,7 @@ view("jobs", "Jobs", (main, params) => {
 slots.jobs = {
   empty: () => `<div class="card empty">Search to see open jobs. Free sources work without any keys.</div>`,
   render: (r) => {
-    const fl = S.ui.jf ||= { type: "", remote: "", source: "", minFit: 0, within: 0, text: "", sort: "fit" };
+    const fl = S.ui.jf ||= jfDefaults();
     const srcs = [...new Set(r.jobs.map((j) => j.source))];
     const st = Object.entries(r.status || {});
     return `<div class="card">
@@ -1448,6 +1451,8 @@ slots.jobs = {
         <div class="field"><label>Source</label><select data-f="source"><option value="">All sources</option>${srcs.map((s) => `<option ${fl.source === s ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></div>
         <div class="field"><label>Posted within</label><select data-f="within"><option value="0">Any</option>${[1, 3, 7, 14, 30].map((d) => `<option value="${d}" ${+fl.within === d ? "selected" : ""}>${d} day${d > 1 ? "s" : ""}</option>`).join("")}</select></div>
         <div class="field"><label>Minimum fit: <span id="minFitV">${fl.minFit}</span></label><input type="range" min="0" max="90" step="5" value="${fl.minFit}" data-f="minFit" style="width:100%;accent-color:var(--accent)"></div>
+        <div class="field"><label>Highest level to show</label><select data-f="maxLevel"><option value="any">Any level</option>${LEVELS.filter((l) => l.rank >= 1 && l.rank <= 5).map((l) => `<option value="${l.id}" ${fl.maxLevel === l.id ? "selected" : ""}>${{ entry: "Entry / junior only", mid: "Up to mid-level (hide senior+)", senior: "Up to senior (hide lead+)", lead: "Up to lead (hide directors+)", director: "Up to director (hide VP+)" }[l.id]}</option>`).join("")}</select></div>
+        <div class="field"><label>Level options</label><div><label class="check" style="margin:0 0 4px"><input type="checkbox" data-f="hideIntern" ${fl.hideIntern ? "checked" : ""}>Hide internships</label><label class="check" style="margin:0" title="Many postings never state a level. Untick to hide them."><input type="checkbox" data-f="showUnknown" ${fl.showUnknown ? "checked" : ""}>Include jobs that don't say</label></div></div>
         <div class="field"><label>Sort</label><select data-f="sort"><option value="fit">Best fit</option><option value="new" ${fl.sort === "new" ? "selected" : ""}>Newest</option></select></div>
         <div class="field" style="grid-column:span 2"><label>Filter text</label><input type="search" data-f="text" value="${esc(fl.text)}" placeholder="${esc(fh("filter"))}"></div>
       </div>
@@ -1457,14 +1462,15 @@ slots.jobs = {
   bind: (el, r) => {
     const draw = () => {
       const js = filteredJobs(r.jobs);
-      $("#shownCount", el).textContent = `Showing ${Math.min(js.length, 100)} of ${js.length}`;
+      const hiddenByLevel = filteredJobs(r.jobs, { ignoreLevel: true }).length - js.length;
+      $("#shownCount", el).textContent = `Showing ${Math.min(js.length, 100)} of ${js.length}${hiddenByLevel > 0 ? ` · ${hiddenByLevel} hidden by seniority` : ""}`;
       $("#jobList", el).innerHTML = js.length ? js.slice(0, 100).map(jobCardHTML).join("") : `<div class="card empty">No jobs match these filters.</div>`;
     };
     const fl = S.ui.jf;
     $("#jobFilters", el).addEventListener("input", (e) => {
       const k = e.target.dataset.f;
       if (!k) return;
-      fl[k] = ["minFit", "within"].includes(k) ? Number(e.target.value) : e.target.value;
+      fl[k] = e.target.type === "checkbox" ? e.target.checked : ["minFit", "within"].includes(k) ? Number(e.target.value) : e.target.value;
       if (k === "minFit") $("#minFitV", el).textContent = e.target.value;
       draw();
     });
@@ -1925,6 +1931,7 @@ async function boot() {
     S.profile.activeFocusId = e.target.value;
     save("profile");
     S.ui.searchForm = null;
+    S.ui.jf = null;
     toast(`Focus: ${activeFocus().label}. Job search, ATS keywords and examples now follow it.`);
     rerender();
   });
