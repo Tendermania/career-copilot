@@ -118,6 +118,20 @@ async function loadAll() {
 }
 const refreshStatus = async () => { S.status = await api("GET", "/api/status"); };
 
+const HINT_DEFAULT = { headline: "Motion Designer · 2D/3D · Rive & Lottie", craft: "Your craft. E.g. 2D/3D motion for brands and products, UI animation in Rive, editing.",
+  aboutExample: "- started in graphic design, moved to motion in 2019\n- love UI animation, did the Rive onboarding for X\n- want a small in-house team, remote", resumeName: "Motion resume 2026", jobTitle: "Motion Designer", filter: "e.g. Rive, games, NYC", recipient: "Sam Lee, Motion Lead at Duolingo" };
+/** Example text that follows the active focus (headline, placeholders, outreach examples…). */
+function fh(key) {
+  const f = activeFocus(), h = f.hints?.[key];
+  if (h) return h;
+  if (f.id === "motion" || !f.label) return HINT_DEFAULT[key];
+  const role = f.roles?.[0] || f.label, kw = (f.keywords || []).slice(0, 2);
+  return ({
+    headline: `${role}${kw.length ? " · " + kw.join(" & ") : ""}`, craft: `Your craft. What you do day to day as a ${role.toLowerCase()}.`,
+    aboutExample: `- how you got started in ${f.label.toLowerCase()}\n- the part of the work you love most\n- what kind of team you want, remote or not`, resumeName: `${f.label} resume 2026`, jobTitle: role,
+    filter: `e.g. ${kw.join(", ") || "a skill"}, remote`, recipient: `Sam Lee, hiring manager at a company you like`,
+  })[key] || HINT_DEFAULT[key];
+}
 const activeFocus = () => (S.profile.focuses || []).find((f) => f.id === S.profile.activeFocusId) || S.profile.focuses?.[0] || { label: "Motion graphics", roles: ["Motion Designer"], keywords: [] };
 const resumeById = (id) => S.resumes.items.find((r) => r.id === id);
 const activeResume = () => resumeById(S.resumes.activeId) || S.resumes.items[0] || null;
@@ -141,7 +155,7 @@ function loadingHTML(key, p) {
 
 function errorHTML(e) {
   if (e.code === "NO_API_KEY") {
-    return `<div class="notice info"><div class="grow"><b>This needs an AI key (${esc(S.status.ai?.label || "Claude")}).</b><br>AI features use your own key, from Claude or DeepSeek. Everything else (ATS check, job search, tracker) works without one.</div><a class="btn small primary" href="#/settings">Add key</a></div>`;
+    return `<div class="notice info"><div class="grow"><b>This needs an AI key (${esc(S.status.ai?.label || "Claude")}).</b><br>AI features use your own key from any major provider (Claude, DeepSeek, ChatGPT, Gemini and more). Everything else (ATS check, job search, tracker) works without one.</div><a class="btn small primary" href="#/settings">Add key</a></div>`;
   }
   if (e.code === "NO_WEB_SEARCH") return `<div class="notice info"><div class="grow">${esc(e.message)}</div><a class="btn small" href="#/settings">Settings</a></div>`;
   if (e.code === "NO_RESUME") return `<div class="notice info"><div class="grow">${esc(e.message)}</div><a class="btn small" href="#/resumes">Go to Resumes</a></div>`;
@@ -397,7 +411,7 @@ function jobPickerHTML(prefix, { compact = false } = {}) {
   const j = S.ui.job;
   return `<div class="job-picker" data-jp="${prefix}">
     ${S.savedJobs.items.length || S.tracker.items.some((t) => t.description) ? `<div class="field"><select data-jsel aria-label="Pick a saved job">${jobOptions()}</select></div>` : ""}
-    <div class="grid cols-2"><div class="field"><label>Job title</label><input type="text" data-jf="title" value="${esc(j.title)}" placeholder="Motion Designer"></div>
+    <div class="grid cols-2"><div class="field"><label>Job title</label><input type="text" data-jf="title" value="${esc(j.title)}" placeholder="${esc(fh("jobTitle"))}"></div>
     <div class="field"><label>Company</label><input type="text" data-jf="company" value="${esc(j.company)}" placeholder="Studio or company"></div></div>
     <div class="field"><label>Job description <span class="hint">paste the whole posting</span></label><textarea data-jf="description" class="${compact ? "" : "tall"}" placeholder="Paste the job posting here…">${esc(j.description)}</textarea></div>
   </div>`;
@@ -532,7 +546,8 @@ function renderNav() {
   $("#sidebar").innerHTML = NAV.map(([g, ids]) => `<div class="nav-group">${g}</div>${ids.map((id) => `<a href="#/${id}" ${id === cur ? 'aria-current="page"' : ""}><svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[id]}</svg>${VIEWS[id].title}${id === "tracker" && due ? `<span class="badge warn">${due}</span>` : ""}<span class="badge accent" data-busy="${id}" hidden>…</span></a>`).join("")}`).join("");
   updateNavBusy();
   const fp = $("#focusPill");
-  fp.innerHTML = (S.profile.focuses || []).map((f) => `<option value="${esc(f.id)}" ${f.id === activeFocus().id ? "selected" : ""}>${esc(f.label)}</option>`).join("");
+  fp.innerHTML = (S.profile.focuses || []).map((f) => `<option value="${esc(f.id)}" ${f.id === activeFocus().id ? "selected" : ""}>${esc(f.label)}</option>`).join("") + `<option value="__suggest">＋ Add a focus from my resume…</option>`;
+  fp.closest("label").title = "Your active career focus. It sets your job-search roles, ATS keywords, AI writing context and the example text across the app. Switch it any time.";
 }
 const BUSY_MAP = { evaluate: ["evaluate", "tailor"], jobs: ["jobs"], companies: ["company"], networking: ["referral", "outreach"], cover: ["cover", "humanize"], interview: ["interview"], profile: ["about"], resumes: ["structure"], ats: ["extract"] };
 function updateNavBusy() {
@@ -590,7 +605,7 @@ view("dashboard", "Dashboard", (main) => {
   const r = activeResume();
 
   const actions = [];
-  if (!S.status.aiReady) actions.push(["Add an AI key (Claude or DeepSeek) to turn on evaluation, tailoring and writing help.", "#/settings", "Settings"]);
+  if (!S.status.aiReady) actions.push(["Add an AI key (Claude, DeepSeek, ChatGPT, Gemini…) to turn on evaluation, tailoring and writing help.", "#/settings", "Settings"]);
   if (!p.name || !p.whoIAm) actions.push(["Tell Career Copilot who you are. It's what makes the writing sound like you.", "#/profile", "Profile"]);
   if (!r) actions.push(["Add your resume (PDF, DOCX or paste).", "#/resumes", "Resumes"]);
   else if (!r.structured && S.status.aiReady) actions.push([`Structure "${r.name}" so tailoring can keep its format.`, "#/resumes", "Resumes"]);
@@ -602,7 +617,7 @@ view("dashboard", "Dashboard", (main) => {
   for (const t of interviewing.slice(0, 2)) actions.push([`Prep for your ${t.company} interview.`, "#/interview", "Interview prep"]);
 
   main.innerHTML = `${pageHead(p.name ? `Hi ${p.name.split(" ")[0]}` : "Welcome", `Focus: <b>${esc(f.label)}</b> · ${esc((f.roles || []).slice(0, 3).join(", "))}`)}
-  ${!S.status.aiReady ? `<div class="notice info" style="margin-bottom:14px"><div class="grow"><b>Running without AI.</b> ATS checks, job search, saving jobs and the tracker all work now. Add a Claude or DeepSeek key in Settings for evaluation, tailoring, cover letters and outreach.</div><a class="btn small primary" href="#/settings">Add key</a></div>` : ""}
+  ${!S.status.aiReady ? `<div class="notice info" style="margin-bottom:14px"><div class="grow"><b>Running without AI.</b> ATS checks, job search, saving jobs and the tracker all work now. Add an AI key (Claude, DeepSeek, ChatGPT, Gemini…) in Settings for evaluation, tailoring, cover letters and outreach.</div><a class="btn small primary" href="#/settings">Add key</a></div>` : ""}
   <div class="grid cols-4">
     <div class="card"><div class="stat">${items.filter((t) => ["applied", "interviewing"].includes(t.status)).length}</div><div class="stat-label">Active applications</div></div>
     <div class="card"><div class="stat" style="color:${due.length ? "var(--bad)" : "inherit"}">${due.length}</div><div class="stat-label">Follow-ups due</div></div>
@@ -628,7 +643,7 @@ view("dashboard", "Dashboard", (main) => {
 // ================= Profile =================
 const PROFILE_FIELDS = [
   ["whoIAm", "Who I am", "In your own words. Background, what drives you, what makes you you."],
-  ["whatIDo", "What I do", "Your craft. E.g. 2D/3D motion for brands and products, UI animation in Rive, editing."],
+  ["whatIDo", "What I do", "@craft"],
   ["proudestWork", "Work I'm proudest of", "2-3 projects with what you did and what happened."],
   ["values", "What matters to me in a job", "Team, craft, stability, mission, pay, growth…"],
   ["workStyle", "How I like to work", "Async/sync, solo vs. team, feedback style, pace."],
@@ -646,7 +661,7 @@ view("profile", "Profile", (main) => {
     <div class="stack">
       <div class="card"><h2>Basics</h2>
         <div class="field"><label>Name</label><input type="text" data-pk="name" value="${esc(p.name)}"></div>
-        <div class="field"><label>Headline</label><input type="text" data-pk="headline" value="${esc(p.headline)}" placeholder="Motion Designer · 2D/3D · Rive & Lottie"></div>
+        <div class="field"><label>Headline</label><input type="text" data-pk="headline" value="${esc(p.headline)}" placeholder="${esc(fh("headline"))}"></div>
         <div class="field"><label>Location</label><input type="text" data-pk="location" value="${esc(p.location)}"></div>
         <div class="field"><label>Links <span class="hint">portfolio, reel, LinkedIn — one per line</span></label><textarea data-pk="links" data-kind="lines" style="min-height:80px">${esc((p.links || []).join("\n"))}</textarea></div>
       </div>
@@ -656,8 +671,9 @@ view("profile", "Profile", (main) => {
         <div class="grid cols-2"><div class="field"><label>Minimum pay</label><input type="text" data-prefk="minPay" value="${esc(p.preferences.minPay)}" placeholder="$85k or $60/hr"></div>
         <div class="field"><label>Locations</label><input type="text" data-prefk="locations" value="${esc(p.preferences.locations)}" placeholder="NYC, US remote"></div></div>
       </div>
-      <div class="card"><div class="card-head"><h2>Job focuses</h2><span class="spacer"></span><button class="btn small" id="addFocus">+ New focus</button></div>
-        <p class="small muted">Each focus has its own target roles and keywords. Switch the active one from the top bar.</p>
+      <div class="card"><div class="card-head"><h2>Job focuses</h2><span class="spacer"></span><button class="btn small" id="suggestFocus"><span class="ai-dot"></span>Suggest from resume</button><button class="btn small" id="addFocus">+ New focus</button></div>
+        <p class="small muted">A focus is a career direction (e.g. Motion graphics, Social media marketing). Each has its own target roles and keywords, and switching it from the top bar changes job search, ATS keywords, AI writing and the example text across the app.</p>
+        <div id="focusSuggest" hidden></div>
         <div class="field"><label>Editing</label><select id="focusSel">${p.focuses.map((x) => `<option value="${esc(x.id)}" ${x.id === f.id ? "selected" : ""}>${esc(x.label)}${x.id === p.activeFocusId ? " (active)" : ""}</option>`).join("")}</select></div>
         <div id="focusForm"></div>
       </div>
@@ -665,11 +681,11 @@ view("profile", "Profile", (main) => {
     <div class="stack">
       <div class="card"><div class="card-head"><h2>About you</h2><span class="spacer"></span><button class="btn small" id="helpWrite"><span class="ai-dot"></span>Help me write this</button></div>
         <div id="aboutHelper" hidden class="stack" style="margin-bottom:14px">
-          <div class="field"><label>Rough answers <span class="hint">bullet points, half sentences, anything</span></label><textarea id="aboutAnswers" placeholder="- started in graphic design, moved to motion in 2019&#10;- love UI animation, did the Rive onboarding for X&#10;- want a small in-house team, remote">${esc(S.ui.aboutAnswers || "")}</textarea></div>
+          <div class="field"><label>Rough answers <span class="hint">bullet points, half sentences, anything</span></label><textarea id="aboutAnswers" placeholder="${esc(fh("aboutExample")).replace(/\n/g, "&#10;")}">${esc(S.ui.aboutAnswers || "")}</textarea></div>
           <div class="row"><button class="btn primary" id="aboutRun"><span class="ai-dot"></span>Draft it</button></div>
           ${slotHTML("about")}
         </div>
-        ${PROFILE_FIELDS.map(([k, label, hint]) => `<div class="field"><label for="pf-${k}">${label} <span class="hint">${hint}</span></label><textarea id="pf-${k}" data-pk="${k}">${esc(p[k])}</textarea></div>`).join("")}
+        ${PROFILE_FIELDS.map(([k, label, hint]) => `<div class="field"><label for="pf-${k}">${label} <span class="hint">${hint === "@craft" ? esc(fh("craft")) : hint}</span></label><textarea id="pf-${k}" data-pk="${k}">${esc(p[k])}</textarea></div>`).join("")}
       </div>
       <div class="card"><h2>Voice samples</h2><p class="small muted">Paste 2-4 things you've written yourself: emails, posts, a past cover letter you liked. Claude matches this voice.</p>
         <textarea data-pk="voiceSamples" class="tall">${esc(p.voiceSamples)}</textarea>
@@ -718,6 +734,30 @@ view("profile", "Profile", (main) => {
   };
   drawFocus();
   $("#focusSel").addEventListener("change", (e) => { editing = e.target.value; drawFocus(); });
+  const syncFocusUI = (activate) => { $("#focusSel").innerHTML = p.focuses.map((x) => `<option value="${esc(x.id)}" ${x.id === editing ? "selected" : ""}>${esc(x.label)}${x.id === p.activeFocusId ? " (active)" : ""}</option>`).join(""); drawFocus(); renderNav(); };
+  const addFocusObj = (fo, activate) => {
+    const clean = { id: fo.id || uid(), label: fo.label, roles: fo.roles || [], keywords: fo.keywords || [], avoidKeywords: fo.avoidKeywords || [], industries: fo.industries || [], seniority: fo.seniority || "", hints: fo.hints };
+    p.focuses.push(clean); editing = clean.id; if (activate) p.activeFocusId = clean.id;
+    save("profile"); syncFocusUI(); return clean;
+  };
+  const drawSuggest = (r) => {
+    S.ui.lastSuggest = r;
+    const box = $("#focusSuggest"); box.hidden = false;
+    const has = (label) => p.focuses.some((x) => x.label.toLowerCase() === label.toLowerCase());
+    box.innerHTML = `<div class="notice info" style="margin-bottom:10px"><div class="grow"><b>Based on your resume</b> <span class="badge ${r.via === "ai" ? "accent" : ""}">${r.via === "ai" ? "AI analysis" : "keyword match"}</span>${r.aiError ? `<div class="small" style="color:var(--warn)">AI unavailable: ${esc(r.aiError)}</div>` : ""}${r.via !== "ai" ? `<div class="small muted">Add an AI key in Settings for a deeper read, including adjacent fields.</div>` : ""}</div><button class="btn small ghost" id="closeSuggest">Close</button></div>
+      ${r.focuses.map((x, i) => `<div class="change" style="margin-bottom:8px"><div class="row" style="flex-wrap:nowrap"><div class="grow"><b>${esc(x.label)}</b> <span class="badge ${x.strength === "strong" ? "good" : x.strength === "solid" ? "info" : ""}">${esc(x.strength || "")}</span><div class="small muted">${esc(x.why || "")}</div><div class="chips" style="margin-top:6px">${(x.roles || []).slice(0, 4).map((t) => `<span class="chip">${esc(t)}</span>`).join("")}</div></div>
+        ${has(x.label) ? `<span class="badge good">Added</span>` : `<div class="row" style="flex-wrap:nowrap"><button class="btn small" data-addf="${i}">Add</button><button class="btn small primary" data-addf="${i}" data-act="1">Add &amp; use</button></div>`}</div></div>`).join("") || `<div class="muted small">No clear matches found in your resume. Pick a preset below.</div>`}
+      <div class="small muted" style="margin:12px 0 6px">Or start from a preset:</div><div class="chips" id="presetChips">${(r.presets || []).map((x) => `<button class="chip" type="button" data-preset="${esc(x.id)}" style="cursor:pointer" ${has(x.label) ? "disabled" : ""}>${esc(x.label)}</button>`).join("")}</div>`;
+    $("#closeSuggest").onclick = () => { box.hidden = true; S.ui.lastSuggest = null; };
+    $$("[data-addf]", box).forEach((b) => (b.onclick = () => { const fo = r.focuses[+b.dataset.addf]; addFocusObj(fo, !!b.dataset.act); toast(b.dataset.act ? `Now focused on ${fo.label}` : `Added ${fo.label}`); if (b.dataset.act) rerender(); else drawSuggest(r); }));
+    $$("[data-preset]", box).forEach((b) => (b.onclick = async () => { const all = (await api("GET", "/api/focuses/presets")).presets; const fo = all.find((x) => x.id.startsWith(b.dataset.preset + "-")); if (!fo) return; addFocusObj(fo, false); toast(`Added ${fo.label}`); drawSuggest(r); }));
+  };
+  $("#suggestFocus").addEventListener("click", async () => {
+    const box = $("#focusSuggest"); box.hidden = false; box.innerHTML = `<div class="loading"><div class="spinner"></div><div class="grow">Reading your resume…</div></div>`;
+    try { drawSuggest(await api("POST", "/api/focuses/suggest", {})); } catch (e) { box.innerHTML = errorHTML(e); }
+  });
+  if (S.ui.lastSuggest) drawSuggest(S.ui.lastSuggest);
+  if (S.ui.openSuggest) { S.ui.openSuggest = false; $("#suggestFocus").click(); $("#suggestFocus").scrollIntoView({ block: "center" }); }
   $("#addFocus").addEventListener("click", () => {
     const n = { id: uid(), label: "New focus", roles: [], keywords: [], avoidKeywords: [], industries: [], seniority: "" };
     p.focuses.push(n);
@@ -802,7 +842,7 @@ view("resumes", "Resumes", (main) => {
         <div class="dropzone" id="drop" tabindex="0" role="button" aria-label="Upload a resume file"><b>Drop a PDF, DOCX or TXT</b><br><span class="small">or click to choose</span></div>
         <input type="file" id="file" accept=".pdf,.docx,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain" hidden>
         <details style="margin-top:12px"><summary class="small" style="cursor:pointer">Paste text instead</summary>
-          <div class="field" style="margin-top:8px"><label>Name</label><input type="text" id="pasteName" placeholder="Motion resume 2026"></div>
+          <div class="field" style="margin-top:8px"><label>Name</label><input type="text" id="pasteName" placeholder="${esc(fh("resumeName"))}"></div>
           <div class="field"><textarea id="pasteText" class="tall" placeholder="Paste your resume text…"></textarea></div>
           <button class="btn" id="pasteSave">Save pasted resume</button>
         </details>
@@ -1409,7 +1449,7 @@ slots.jobs = {
         <div class="field"><label>Posted within</label><select data-f="within"><option value="0">Any</option>${[1, 3, 7, 14, 30].map((d) => `<option value="${d}" ${+fl.within === d ? "selected" : ""}>${d} day${d > 1 ? "s" : ""}</option>`).join("")}</select></div>
         <div class="field"><label>Minimum fit: <span id="minFitV">${fl.minFit}</span></label><input type="range" min="0" max="90" step="5" value="${fl.minFit}" data-f="minFit" style="width:100%;accent-color:var(--accent)"></div>
         <div class="field"><label>Sort</label><select data-f="sort"><option value="fit">Best fit</option><option value="new" ${fl.sort === "new" ? "selected" : ""}>Newest</option></select></div>
-        <div class="field" style="grid-column:span 2"><label>Filter text</label><input type="search" data-f="text" value="${esc(fl.text)}" placeholder="e.g. Rive, games, NYC"></div>
+        <div class="field" style="grid-column:span 2"><label>Filter text</label><input type="search" data-f="text" value="${esc(fl.text)}" placeholder="${esc(fh("filter"))}"></div>
       </div>
       <div class="row"><span class="small muted" id="shownCount"></span><span class="grow"></span><button class="btn small" id="verifyAll">Verify all shown</button></div>
     </div><div id="jobList" style="margin-top:12px"></div>`;
@@ -1520,7 +1560,7 @@ view("networking", "Networking", (main) => {
     <div class="split"><div class="card"><h2>Message</h2>
       <div class="grid cols-2"><div class="field"><label>Channel</label><select id="oChannel">${CHANNELS.map(([c]) => `<option ${o.channel === c ? "selected" : ""}>${c}</option>`).join("")}</select></div>
       <div class="field"><label>Stage</label><select id="oStage">${["first contact", "follow-up (no reply)", "ask for a referral (after rapport)", "thank-you after a chat", "thank-you after interview", "check in with a recruiter"].map((s) => `<option ${o.stage === s ? "selected" : ""}>${s}</option>`).join("")}</select></div></div>
-      <div class="field"><label>Who</label><input type="text" id="oRecipient" value="${esc(o.recipient)}" placeholder="Sam Lee, Motion Lead at Duolingo"></div>
+      <div class="field"><label>Who</label><input type="text" id="oRecipient" value="${esc(o.recipient)}" placeholder="${esc(fh("recipient"))}"></div>
       <div class="field"><label>What you know about them <span class="hint">their work, a post, shared background</span></label><textarea id="oContext">${esc(o.context)}</textarea></div>
       <div class="field"><label>Your goal</label><input type="text" id="oGoal" value="${esc(o.goal)}" placeholder="a 15-minute chat about the team"></div>
       <div class="grid cols-2"><div class="field"><label>Company</label><input type="text" id="oCompany" value="${esc(o.company || S.ui.job.company)}"></div><div class="field"><label>Related job</label><input type="text" id="oJob" value="${esc(o.jobTitle || S.ui.job.title)}"></div></div>
@@ -1800,7 +1840,7 @@ view("settings", "Settings", async (main) => {
   <form id="setForm" class="stack" autocomplete="off">
     <div class="card"><h2>AI provider</h2>
       <p class="small muted">Used for evaluation, tailoring, resume structuring, cover letters, outreach, referral plans and interview prep. Billed to your own account with that provider.</p>
-      <div class="seg" role="radiogroup" aria-label="AI provider" style="margin-bottom:12px">${[["claude", "Claude (Anthropic)"], ["deepseek", "DeepSeek"]].map(([v, l]) => `<label><input type="radio" name="aiProvider" value="${v}" ${(s.aiProvider || "claude") === v ? "checked" : ""}>${l}</label>`).join("")}</div>
+      <div class="field"><label for="aiProv">Provider</label><select name="aiProvider" id="aiProv" style="max-width:360px">${(S.status.providers || []).map((pv) => `<option value="${pv.id}" ${(s.aiProvider || "claude") === pv.id ? "selected" : ""}>${esc(pv.label)}</option>`).join("")}</select><div class="hint">Pick the AI you have a key for. Switch any time; each provider remembers its own key.</div></div>
       <div data-prov="claude" ${(s.aiProvider || "claude") === "claude" ? "" : "hidden"}>
         ${keyField("anthropicApiKey", "Anthropic API key", "", "https://console.anthropic.com/settings/keys")}
         <div class="field"><label>Model</label><input type="text" name="model" value="${esc(s.model)}" list="models" style="max-width:320px"><datalist id="models"><option value="claude-opus-5-5"><option value="claude-sonnet-5-5"><option value="claude-haiku-5-5"></datalist><div class="hint">Default claude-opus-5-5 (best writing and judgment). Sonnet is cheaper and faster.</div></div>
@@ -1808,11 +1848,12 @@ view("settings", "Settings", async (main) => {
         <div class="hint">On by default. If the model declines a request, Anthropic retries it on a fallback model so you still get an answer. Turn off to only ever use the model above.</div>
         <p class="small muted" style="margin-top:8px">Claude can search the web, so Company check and the AI web job search work with it.</p>
       </div>
-      <div data-prov="deepseek" ${s.aiProvider === "deepseek" ? "" : "hidden"}>
-        ${keyField("deepseekApiKey", "DeepSeek API key", "", "https://platform.deepseek.com/api_keys")}
-        <div class="field"><label>Model</label><input type="text" name="deepseekModel" value="${esc(s.deepseekModel)}" list="dsmodels" style="max-width:320px"><datalist id="dsmodels"><option value="deepseek-v4-flash"></datalist><div class="hint">Default deepseek-v4-flash. If DeepSeek renames its models, put the new name here.</div></div>
-        <div class="notice info small"><div class="grow">DeepSeek's API has no web search, so <b>Company check</b> and the <b>AI web search</b> job source are off while DeepSeek is selected. Everything else works. Note: per DeepSeek's privacy policy, what you send (your resume, job text) is processed and stored on servers in China.</div></div>
-      </div>
+      ${(S.status.providers || []).filter((pv) => pv.id !== "claude").map((pv) => `<div data-prov="${pv.id}" ${s.aiProvider === pv.id ? "" : "hidden"}>
+        ${keyField(`${pv.id}ApiKey`, `${pv.label} API key${pv.custom ? " (optional for local models)" : ""}`, "", pv.help)}
+        ${pv.custom ? `<div class="field"><label>Base URL</label><input type="text" name="customBaseUrl" value="${esc(s.customBaseUrl)}" placeholder="http://localhost:11434/v1" style="max-width:420px"></div>` : ""}
+        <div class="field"><label>Model</label><input type="text" name="${pv.id}Model" value="${esc(s[`${pv.id}Model`])}" placeholder="${pv.custom ? "e.g. llama3.1" : esc(pv.model)}" style="max-width:320px"><div class="hint">${pv.model ? `Default ${esc(pv.model)}. If the provider renames models, put the new name here.` : "Required. The model name your endpoint serves."}</div></div>
+        <div class="notice info small"><div class="grow">${esc(pv.label)}'s API has no web search, so <b>Company check</b> and the <b>AI web search</b> job source are off while it is selected. Everything else works.${pv.note ? ` ${esc(pv.note)}` : ""}</div></div>
+      </div>`).join("")}
     </div>
     <div class="card"><h2>Job search keys <span class="hint">all optional, all free tiers</span></h2>
       <div class="grid cols-2">
@@ -1830,13 +1871,16 @@ view("settings", "Settings", async (main) => {
   </form>
   <div class="card" style="margin-top:14px"><h2>Job sources</h2><ul class="list">${(S.status.sources || []).map((x) => `<li class="row"><span class="badge ${x.active ? "good" : ""}">${x.active ? "active" : "off"}</span><b>${esc(x.name)}</b><span class="small muted grow">${esc(x.note)}</span></li>`).join("")}</ul></div>
   <div class="card" style="margin-top:14px"><h2>Appearance</h2><div class="seg" role="radiogroup">${["system", "light", "dark"].map((t) => `<label><input type="radio" name="theme" value="${t}" ${theme === t ? "checked" : ""}>${t[0].toUpperCase() + t.slice(1)}</label>`).join("")}</div></div>
-  <div class="card" style="margin-top:14px"><h2>Privacy</h2><p class="small">Your profile, resumes, letters, tracker and keys are saved as JSON files in the <code class="mono">data/</code> folder of this app, which git ignores. The server only listens on this computer. Text is sent to Anthropic only when you press an AI button, and job searches call the job boards directly.</p></div>`;
+  <div class="card" style="margin-top:14px"><h2>Privacy</h2><p class="small">Your profile, resumes, letters, tracker and keys are saved as JSON files in the <code class="mono">data/</code> folder of this app, which git ignores. The server only listens on this computer. Text is sent to your chosen AI provider only when you press an AI button, and job searches call the job boards directly.</p></div>`;
   const form = $("#setForm");
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(form);
-    const body = { aiProvider: fd.get("aiProvider"), model: fd.get("model"), deepseekModel: fd.get("deepseekModel"), useFallbacks: !!fd.get("useFallbacks"), adzunaAppId: fd.get("adzunaAppId"), adzunaCountry: fd.get("adzunaCountry"), usajobsEmail: fd.get("usajobsEmail"), greenhouseBoards: fd.get("greenhouseBoards"), leverBoards: fd.get("leverBoards"), ashbyBoards: fd.get("ashbyBoards") };
-    for (const k of ["anthropicApiKey", "deepseekApiKey", "adzunaAppKey", "rapidApiKey", "usajobsKey"]) if (fd.get(k)) body[k] = fd.get(k);
+    const body = { aiProvider: fd.get("aiProvider"), model: fd.get("model"), useFallbacks: !!fd.get("useFallbacks"), adzunaAppId: fd.get("adzunaAppId"), adzunaCountry: fd.get("adzunaCountry"), usajobsEmail: fd.get("usajobsEmail"), greenhouseBoards: fd.get("greenhouseBoards"), leverBoards: fd.get("leverBoards"), ashbyBoards: fd.get("ashbyBoards") };
+    const compat = (S.status.providers || []).filter((pv) => pv.id !== "claude");
+    for (const pv of compat) { const m = fd.get(`${pv.id}Model`); if (m !== null) body[`${pv.id}Model`] = m; }
+    if (fd.get("customBaseUrl") !== null) body.customBaseUrl = fd.get("customBaseUrl");
+    for (const k of ["anthropicApiKey", ...compat.map((pv) => `${pv.id}ApiKey`), "adzunaAppKey", "rapidApiKey", "usajobsKey"]) if (fd.get(k)) body[k] = fd.get(k);
     try {
       await api("PUT", "/api/state/settings", body);
       await refreshStatus();
@@ -1867,7 +1911,9 @@ const isDark = () => document.documentElement.dataset.theme === "dark" || (!docu
 async function boot() {
   applyTheme();
   $("#themeBtn").addEventListener("click", () => { ls.set("theme", isDark() ? "light" : "dark"); applyTheme(); });
+  if (ls.get("navHidden", false)) document.body.classList.add("nav-hidden");
   $("#menuBtn").addEventListener("click", () => {
+    if (matchMedia("(min-width: 861px)").matches) { const h = document.body.classList.toggle("nav-hidden"); ls.set("navHidden", h); $("#menuBtn").setAttribute("aria-expanded", String(!h)); return; }
     const open = !$("#sidebar").classList.contains("open");
     $("#sidebar").classList.toggle("open", open);
     $("#scrim").hidden = !open;
@@ -1875,10 +1921,11 @@ async function boot() {
   });
   $("#scrim").addEventListener("click", closeMenu);
   $("#focusPill").addEventListener("change", (e) => {
+    if (e.target.value === "__suggest") { S.ui.openSuggest = true; e.target.value = activeFocus().id; if (location.hash === "#/profile") rerender(); else location.hash = "#/profile"; return; }
     S.profile.activeFocusId = e.target.value;
     save("profile");
     S.ui.searchForm = null;
-    toast(`Focus: ${activeFocus().label}`);
+    toast(`Focus: ${activeFocus().label}. Job search, ATS keywords and examples now follow it.`);
     rerender();
   });
   try {

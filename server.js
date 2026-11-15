@@ -10,6 +10,8 @@ import { findAiTells, findSkills, norm, AI_TELLS } from "./lib/text.js";
 import { searchJobs, verifyPosting, SOURCE_INFO, classifyType, flagsFor } from "./lib/jobs.js";
 import { parseUpload, resumeToDocx, coverLetterToDocx, resumeToText } from "./lib/files.js";
 import { tasks, aiStatus, requireAi } from "./lib/ai.js";
+import { COMPAT, fieldsFor, providerList } from "./lib/providers.js";
+import { PRESETS, suggestFromText, toFocus } from "./lib/focus.js";
 
 loadDotEnv();
 
@@ -19,19 +21,11 @@ const PORT = Number(process.env.PORT) || 5317;
 const HOST = process.env.HOST || "127.0.0.1";
 const MAX_BODY = 25 * 1024 * 1024;
 const COMPANY_TTL = 14 * 86400000;
-const SECRET_KEYS = ["anthropicApiKey", "deepseekApiKey", "adzunaAppKey", "rapidApiKey", "usajobsKey"];
+const SECRET_KEYS = ["anthropicApiKey", ...Object.keys(COMPAT).map((id) => fieldsFor(id).key), "adzunaAppKey", "rapidApiKey", "usajobsKey"];
 
 // ---------- Seed data ----------
 
-export const DEFAULT_FOCUS = {
-  id: "motion",
-  label: "Motion graphics",
-  roles: ["Motion Designer", "Motion Graphics Designer", "Animator", "2D/3D Motion Designer", "Video Editor"],
-  keywords: ["After Effects", "Cinema 4D", "Rive", "Lottie", "Illustrator", "Photoshop", "Premiere Pro"],
-  avoidKeywords: [],
-  industries: [],
-  seniority: "",
-};
+export const DEFAULT_FOCUS = { id: "motion", label: PRESETS[0].label, roles: [...PRESETS[0].roles], keywords: [...PRESETS[0].keywords], avoidKeywords: [], industries: [], seniority: "", hints: { ...PRESETS[0].hints } };
 
 function seed() {
   if (!read("profile")) {
@@ -73,7 +67,7 @@ function publicSettings() {
 function saveSettings(incoming = {}) {
   const saved = read("settings", {}) || {};
   const next = { ...saved };
-  const allowed = ["aiProvider", "anthropicApiKey", "deepseekApiKey", "deepseekModel", "model", "adzunaAppId", "adzunaAppKey", "adzunaCountry", "rapidApiKey", "usajobsKey", "usajobsEmail", "greenhouseBoards", "leverBoards", "ashbyBoards", "useFallbacks"];
+  const allowed = ["aiProvider", "anthropicApiKey", "model", ...Object.keys(COMPAT).flatMap((id) => Object.values(fieldsFor(id))), "adzunaAppId", "adzunaAppKey", "adzunaCountry", "rapidApiKey", "usajobsKey", "usajobsEmail", "greenhouseBoards", "leverBoards", "ashbyBoards", "useFallbacks"];
   for (const k of allowed) {
     if (!(k in incoming)) continue;
     let v = incoming[k];
@@ -265,6 +259,7 @@ route("GET", /^\/api\/status$/, () => {
     ok: true,
     hasAnthropicKey: !!s.anthropicApiKey,
     ai: aiStatus(s),
+    providers: providerList(),
     aiReady: aiStatus(s).ready,
     model: s.model,
     useFallbacks: s.useFallbacks,
@@ -310,6 +305,25 @@ route("POST", /^\/api\/ats$/, (req, m, body) => {
   }
   return report;
 });
+
+
+// Suggest job focuses from the resume. Works without AI (keyword scoring); uses AI when a key is set.
+route("POST", /^\/api\/focuses\/suggest$/, async (req, m, body) => {
+  const r = read("resumes", { items: [] }) || { items: [] };
+  const resume = (body.resumeId && (r.items || []).find((x) => x.id === body.resumeId)) || activeResume();
+  if (!resume) throw fail(400, "Add a resume first (Resumes tab).", "NO_RESUME");
+  const text = resume.text || (resume.structured ? resumeToText(resume.structured) : "");
+  const basic = suggestFromText(text).slice(0, 5).map(({ preset, score, hits }) => ({ ...toFocus(preset), why: `Your resume mentions ${hits.slice(0, 4).join(", ")}.`, strength: score >= 6 ? "strong" : score >= 3 ? "solid" : "stretch", presetId: preset.id }));
+  if (!aiStatus().ready) return { via: "basic", focuses: basic, presets: PRESETS.map((p) => ({ id: p.id, label: p.label })) };
+  try {
+    const res = await tasks.suggestFocuses({ resume, profile: read("profile", {}) });
+    const focuses = res.data.focuses.map((f) => ({ id: `${f.label.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 16)}-${Math.random().toString(36).slice(2, 6)}`, ...f }));
+    return { via: "ai", focuses, presets: PRESETS.map((p) => ({ id: p.id, label: p.label })), usage: res.usage };
+  } catch (e) {
+    return { via: "basic", aiError: e.message, focuses: basic, presets: PRESETS.map((p) => ({ id: p.id, label: p.label })) };
+  }
+});
+route("GET", /^\/api\/focuses\/presets$/, () => ({ presets: PRESETS.map((p) => toFocus(p)) }));
 
 route("POST", /^\/api\/ai\/(\w+)$/, async (req, m, body) => {
   const name = m[1];
