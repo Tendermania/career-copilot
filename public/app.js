@@ -431,7 +431,7 @@ function bindJobPicker(root, onChange = () => {}) {
   }
 }
 function setWorkingJob(j) {
-  S.ui.job = { id: j.id, title: j.title || "", company: j.company || "", location: j.location || "", type: j.type || "", salary: j.salary || "", url: j.applyUrl || j.url || "", description: j.description || "" };
+  S.ui.job = { id: j.id, title: j.title || "", company: j.company || "", location: j.location || "", type: j.type || "", salary: payLine(j), url: j.applyUrl || j.url || "", description: j.description || "" };
   saveJob();
 }
 
@@ -602,7 +602,9 @@ view("dashboard", "Dashboard", (main) => {
   const counts = Object.fromEntries(STATUSES.map((s) => [s, items.filter((t) => t.status === s).length]));
   const last = S.ui.lastSearch;
   const savedIds = new Set(S.savedJobs.items.map((j) => j.id));
-  const matches = (last?.jobs || []).filter((j) => !savedIds.has(j.id) && j.fit?.score >= 40).slice(0, 6);
+  if (last && !S.results.jobs) S.results.jobs = { ...last, status: {}, dropped: {}, restored: true };
+  freshenOnce(S.results.jobs, "lastSearch", "jobs"); // drop matches that closed since the search
+  const matches = (S.results.jobs?.jobs || last?.jobs || []).filter((j) => !savedIds.has(j.id) && j.fit?.score >= 40 && !isGone(j)).slice(0, 6);
   const r = activeResume();
 
   const actions = [];
@@ -634,7 +636,7 @@ view("dashboard", "Dashboard", (main) => {
     </div>
   </div>
   <div class="card" style="margin-top:14px"><div class="card-head"><h2>New matches</h2><span class="muted small">${last ? `from your search ${ago(last.at)}` : ""}</span><span class="spacer"></span><a class="btn small" href="#/jobs">Search jobs</a></div>
-    ${matches.length ? `<ul class="list">${matches.map((j) => `<li class="row">${scoreRing(j.fit.score, true)}<div class="grow"><a href="${esc(j.applyUrl || j.url)}" target="_blank" rel="noopener"><b>${esc(j.title)}</b></a> · ${esc(j.company)}<div class="small muted">${esc(j.type)} · ${j.remote ? "Remote" : esc(j.location)} · ${esc(j.source)} · ${ago(j.postedAt)}</div></div></li>`).join("")}</ul>` : `<p class="muted">No matches yet. Run a search in Jobs.</p>`}
+    ${matches.length ? `<ul class="list">${matches.map((j) => `<li class="row">${scoreRing(j.fit.score, true)}<div class="grow"><a href="${esc(j.applyUrl || j.url)}" target="_blank" rel="noopener"><b>${esc(j.title)}</b></a> · ${esc(j.company)}<div class="small muted">${esc(j.type)} · ${j.remote ? "Remote" : esc(j.location)}${payLine(j) ? ` · ${esc(payLine(j))}` : ""} · ${esc(j.source)} · ${ago(j.postedAt)}${(S.ui.verify[j.url] || j.verified)?.status === "open" ? " · confirmed open" : ""}</div></div></li>`).join("")}</ul>${S.results.jobs?.freshened === "checking" ? '<p class="small muted" style="margin:10px 0 0">Re-checking that these are still open…</p>' : ""}` : `<p class="muted">No matches yet. Run a search in Jobs.</p>`}
   </div>
   <div class="card" style="margin-top:14px"><div class="card-head"><h2>Pipeline</h2></div>
     <div class="row">${STATUSES.map((s) => `<div style="min-width:110px"><div class="stat">${counts[s]}</div><div class="stat-label">${STATUS_LABEL[s]}</div></div>`).join("")}</div>
@@ -667,8 +669,8 @@ view("profile", "Profile", (main) => {
         <div class="field"><label>Links <span class="hint">portfolio, reel, LinkedIn — one per line</span></label><textarea data-pk="links" data-kind="lines" style="min-height:80px">${esc((p.links || []).join("\n"))}</textarea></div>
       </div>
       <div class="card"><h2>Preferences</h2>
-        <label>Workplace</label><div style="margin-bottom:10px">${["Remote", "Hybrid", "On-site"].map((w) => `<label class="check"><input type="checkbox" data-pref="workplace" value="${w}" ${(p.preferences.workplace || []).includes(w) ? "checked" : ""}>${w}</label>`).join("")}</div>
-        <label>Employment types</label><div style="margin-bottom:10px">${["Full-time", "Part-time", "Contract", "Contract-to-hire", "Freelance", "Internship"].map((w) => `<label class="check"><input type="checkbox" data-pref="types" value="${w}" ${(p.preferences.types || []).includes(w) ? "checked" : ""}>${w}</label>`).join("")}</div>
+        <label>Workplace</label><div class="checks" style="margin-bottom:14px">${["Remote", "Hybrid", "On-site"].map((w) => `<label class="check"><input type="checkbox" data-pref="workplace" value="${w}" ${(p.preferences.workplace || []).includes(w) ? "checked" : ""}>${w}</label>`).join("")}</div>
+        <label>Employment types</label><div class="checks" style="margin-bottom:14px">${["Full-time", "Part-time", "Contract", "Contract-to-hire", "Freelance", "Internship"].map((w) => `<label class="check"><input type="checkbox" data-pref="types" value="${w}" ${(p.preferences.types || []).includes(w) ? "checked" : ""}>${w}</label>`).join("")}</div>
         <div class="grid cols-2"><div class="field"><label>Minimum pay</label><input type="text" data-prefk="minPay" value="${esc(p.preferences.minPay)}" placeholder="$85k or $60/hr"></div>
         <div class="field"><label>Locations</label><input type="text" data-prefk="locations" value="${esc(p.preferences.locations)}" placeholder="NYC, US remote"></div></div>
       </div>
@@ -1289,6 +1291,7 @@ async function runSearch() {
     const r = await api("POST", "/api/jobs/search", { queries: csv(f.queries), location: f.location, remoteOnly: f.remoteOnly, maxAgeDays: Number(f.maxAgeDays), types: f.types, sources: f.sources }, { signal: ctrl.signal });
     r.at = new Date().toISOString();
     S.results.jobs = r;
+    for (const j of r.jobs) if (j.verified) S.ui.verify[j.url] = j.verified;
     S.ui.lastSearch = { at: r.at, jobs: r.jobs.slice(0, 120).map((j) => ({ ...j, description: j.description.slice(0, 1500) })) };
     ls.set("lastSearch", S.ui.lastSearch);
   } catch (e) {
@@ -1300,20 +1303,49 @@ async function runSearch() {
   }
 }
 
+document.addEventListener("input", (e) => { const t = e.target; if (t && t.type === "range") t.style.setProperty("--p", `${((t.value - (t.min || 0)) / ((t.max || 100) - (t.min || 0))) * 100}%`); });
+
 const isSaved = (id) => S.savedJobs.items.some((j) => j.id === id);
+
+const isGone = (j) => { const v = S.ui.verify[j.url] || j.verified; return !!v && (v.status === "closed" || v.status === "likely-closed"); };
+const payLine = (j) => (j.pay ? (j.pay.text ? `${j.pay.label}: ${j.pay.text}` : j.pay.kind === "unknown" ? "" : `Likely ${j.pay.label.toLowerCase()}, amount not listed`) : j.salary || "");
+
+// What kind of pay it is, the figure the posting states, and where that figure came from.
+function payHTML(j) {
+  const p = j.pay;
+  if (!p) return j.salary ? `<div class="pay"><span class="badge">Pay</span><b>${esc(j.salary)}</b></div>` : "";
+  const guess = p.min == null && p.kind !== "unknown";
+  const kind = guess ? `Likely ${p.label.toLowerCase()}` : p.label;
+  const amount = p.text ? `<b>${esc(p.text)}</b>${p.annualText ? `<span class="muted">${esc(p.annualText)}</span>` : ""}` : `<span class="muted">${p.kind === "unknown" ? "no pay details in the posting" : "amount not listed"}</span>`;
+  const src = p.min == null ? "" : p.estimated ? "job board's estimate, not the employer's" : p.from === "listing" ? "from the listing's pay field" : "found in the description";
+  return `<div class="pay" title="${esc(p.note)}"><span class="badge ${p.min != null ? "good" : guess ? "" : "warn"}">${esc(kind)}</span>${amount}${src ? `<span class="faint">${esc(src)}</span>` : ""}</div>`;
+}
+
+// The seven things the fit score is made of, each with its points and the reason.
+function fitHTML(j) {
+  const f = j.fit || {};
+  const why = (f.why || []).length ? `<div class="fit-line"><span class="fit-tag good">Why it fits</span><span>${esc(f.why.slice(0, 3).join(" · "))}</span></div>` : "";
+  const con = (f.concerns || []).length ? `<div class="fit-line"><span class="fit-tag bad">Watch out</span><span>${esc(f.concerns.slice(0, 3).join(" · "))}</span></div>` : "";
+  if (!f.breakdown) return `${why}${f.missingSkills?.length ? `<div class="muted">Skills they list that you haven't: ${esc(f.missingSkills.slice(0, 6).join(", "))}</div>` : ""}`;
+  const rows = f.breakdown.map((b) => `<div class="fit-row ${b.tone || ""}"><span class="fit-label">${esc(b.label)}</span><span class="meter"><span style="width:${Math.round((b.points / b.max) * 100)}%"></span></span><span class="fit-pts">${b.points}<i>/${b.max}</i></span><span class="fit-note">${esc(b.note)}</span></div>`).join("");
+  const adj = (f.adjustments || []).map((a) => `<div class="fit-row bad"><span class="fit-label">Adjustment</span><span></span><span class="fit-pts">${a.points}</span><span class="fit-note">${esc(a.label)}</span></div>`).join("");
+  return `${why}${con}<details class="fit-details"><summary>How this ${f.score} was worked out</summary><div class="fit-grid">${rows}${adj}</div>${f.confidenceNote ? `<p class="small muted" style="margin:8px 0 0">${esc(f.confidenceNote)}</p>` : ""}${f.missingSkills?.length ? `<p class="small muted" style="margin:8px 0 0">Skills they name that aren't on your resume: ${esc(f.missingSkills.slice(0, 8).join(", "))}</p>` : ""}</details>`;
+}
 
 function jobCardHTML(j) {
   jobIndex.set(j.id, j);
-  const v = S.ui.verify[j.url];
-  const vBadge = v ? `<span class="badge ${v.status === "open" ? "good" : v.status === "closed" || v.status === "likely-closed" ? "bad" : ""}" title="${esc(v.reason)}">${v.status === "open" ? "Still open" : v.status === "closed" ? "Closed" : v.status === "likely-closed" ? "Likely closed" : v.status === "checking" ? "Checking…" : "Couldn't verify"}</span>` : "";
+  const v = S.ui.verify[j.url] || j.verified;
+  const when = v?.checkedAt ? ` · checked ${ago(v.checkedAt)}` : "";
+  const vBadge = v ? `<span class="badge ${v.status === "open" ? "good" : v.status === "closed" || v.status === "likely-closed" ? "bad" : ""}" title="${esc(v.reason)}">${v.status === "open" ? `Open${when}` : v.status === "closed" ? "Closed" : v.status === "likely-closed" ? "Likely closed" : v.status === "checking" ? "Checking…" : "Couldn't confirm it's open"}</span>` : "";
   const typeClass = /Contract|Freelance|Temporary/.test(j.type) ? "warn" : j.type === "Full-time" ? "good" : "";
   return `<article class="card job" data-job="${esc(j.id)}">
     <div><h3><a href="${esc(j.applyUrl || j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a></h3>
-      <div class="meta"><b>${esc(j.company)}</b><span>${esc(j.location || "")}</span>${j.salary ? `<span>${esc(j.salary)}</span>` : ""}<span>${j.postedAt ? ago(j.postedAt) : esc(j.postedText || "date unknown")}</span></div>
-      <div class="row" style="margin-top:6px;gap:6px"><span class="badge ${typeClass}">${esc(j.type)}</span>${levelOf(j).id !== "unknown" ? `<span class="badge ${levelOf(j).rank >= 3 ? "warn" : "accent"}" title="${esc(levelOf(j).why)}">${esc(levelOf(j).label)}</span>` : ""}${j.remote ? '<span class="badge info">Remote</span>' : ""}${j.hidden ? '<span class="badge accent" title="Found in a post or thread, not on a job board">Hidden find</span>' : ""}<span class="badge">${esc(j.source)}${j.via ? ` · ${esc(j.via)}` : ""}</span>${(j.alsoOn || []).length ? `<span class="badge" title="Also listed on">also on ${esc(j.alsoOn.join(", "))}</span>` : ""}${vBadge}</div>
+      <div class="meta"><b>${esc(j.company)}</b><span>${esc(j.location || "")}</span><span>${j.postedAt ? ago(j.postedAt) : esc(j.postedText || "date unknown")}</span></div>
+      ${payHTML(j)}
+      <div class="row" style="margin-top:8px;gap:6px"><span class="badge ${typeClass}">${esc(j.type)}</span>${levelOf(j).id !== "unknown" ? `<span class="badge ${levelOf(j).rank >= 3 ? "warn" : "accent"}" title="${esc(levelOf(j).why)}">${esc(levelOf(j).label)}</span>` : ""}${j.remote ? '<span class="badge info">Remote</span>' : ""}${j.hidden ? '<span class="badge accent" title="Found in a post or thread, not on a job board">Hidden find</span>' : ""}<span class="badge">${esc(j.source)}${j.via ? ` · ${esc(j.via)}` : ""}</span>${(j.alsoOn || []).length ? `<span class="badge" title="Also listed on">also on ${esc(j.alsoOn.join(", "))}</span>` : ""}${vBadge}</div>
     </div>
-    <div class="side">${scoreRing(j.fit?.score ?? 0, true)}<span class="small muted">fit</span></div>
-    <div class="full small">${(j.fit?.why || []).length ? `<span class="muted">Why: ${esc(j.fit.why.join(" · "))}</span>` : ""}${j.fit?.missingSkills?.length ? `<div class="muted">Skills they list that you haven't: ${esc(j.fit.missingSkills.slice(0, 6).join(", "))}</div>` : ""}</div>
+    <div class="side">${scoreRing(j.fit?.score ?? 0, true)}<span class="small muted">fit${j.fit?.confidence === "low" ? " (rough)" : ""}</span></div>
+    <div class="full small">${fitHTML(j)}</div>
     ${(j.flags || []).length ? `<div class="full">${j.flags.map((f) => `<div class="flag ${f.level}">${esc(f.text)}</div>`).join("")}</div>` : ""}
     <div class="full row" style="gap:6px">
       <button class="btn small ${isSaved(j.id) ? "" : "primary"}" data-ja="save">${isSaved(j.id) ? "Saved ✓" : "Save"}</button>
@@ -1322,7 +1354,7 @@ function jobCardHTML(j) {
       <button class="btn small" data-ja="company">Company check</button>
       <button class="btn small" data-ja="network">Referrals</button>
       <button class="btn small" data-ja="track">Track</button>
-      <button class="btn small ghost" data-ja="verify">Verify still open</button>
+      <button class="btn small ghost" data-ja="verify">Check it's still open</button>
       <button class="btn small ghost" data-ja="desc" aria-expanded="false">Details</button>
     </div>
     <div class="full desc" hidden>${esc(j.description)}</div>
@@ -1332,7 +1364,7 @@ function jobCardHTML(j) {
 function trackJob(j, status = "saved") {
   let t = S.tracker.items.find((x) => x.jobId === j.id || (x.url && x.url === (j.applyUrl || j.url)));
   if (!t) {
-    t = { id: uid(), jobId: j.id, company: j.company, role: j.title, url: j.applyUrl || j.url, location: j.location, type: j.type, salary: j.salary, description: j.description, status, savedAt: today(), appliedAt: "", followUpAt: "", contacts: "", notes: "", resumeId: "", coverId: "", history: [{ status, at: new Date().toISOString() }] };
+    t = { id: uid(), jobId: j.id, company: j.company, role: j.title, url: j.applyUrl || j.url, location: j.location, type: j.type, salary: payLine(j), description: j.description, status, savedAt: today(), appliedAt: "", followUpAt: "", contacts: "", notes: "", resumeId: "", coverId: "", history: [{ status, at: new Date().toISOString() }] };
     S.tracker.items.unshift(t);
     save("tracker");
   }
@@ -1342,14 +1374,42 @@ function trackJob(j, status = "saved") {
 async function verifyJobs(js) {
   for (const j of js) S.ui.verify[j.url] = { status: "checking", reason: "" };
   redrawJobBadges(js);
-  const urls = js.map((j) => j.url);
   try {
-    const r = urls.length === 1 ? { results: { [urls[0]]: await api("POST", "/api/jobs/verify", { url: urls[0] }) } } : await api("POST", "/api/jobs/verify", { urls });
-    Object.assign(S.ui.verify, r.results);
+    const r = await api("POST", "/api/jobs/verify", { items: js.map((j) => ({ url: j.url, applyUrl: j.applyUrl })) });
+    for (const j of js) { const v = r.results[j.url]; if (v) { S.ui.verify[j.url] = v; j.verified = v; } else delete S.ui.verify[j.url]; }
   } catch (e) {
-    for (const u of urls) S.ui.verify[u] = { status: "unknown", reason: e.message };
+    for (const j of js) S.ui.verify[j.url] = { status: "unknown", reason: e.message };
   }
   redrawJobBadges(js);
+}
+
+// Results kept from an earlier visit go stale: re-open the postings and drop any that have closed since.
+const RECHECK_AFTER = 6 * 3600000;
+async function freshenResults(r, storeKey) {
+  const due = r.jobs.slice(0, 60).filter((j) => /^https?:/.test(j.url || "") && (!j.verified?.checkedAt || Date.now() - new Date(j.verified.checkedAt).getTime() > RECHECK_AFTER));
+  if (!due.length) return 0;
+  const res = await api("POST", "/api/jobs/verify", { items: due.map((j) => ({ url: j.url, applyUrl: j.applyUrl })) });
+  for (const j of due) { const v = res.results[j.url]; if (v) { j.verified = v; S.ui.verify[j.url] = v; } }
+  const before = r.jobs.length;
+  r.jobs = r.jobs.filter((j) => !isGone(j));
+  if (S.ui[storeKey]) { S.ui[storeKey] = { ...S.ui[storeKey], jobs: r.jobs.slice(0, 120).map((j) => ({ ...j, description: (j.description || "").slice(0, 1500) })) }; ls.set(storeKey, S.ui[storeKey]); }
+  return before - r.jobs.length;
+}
+function freshenOnce(r, storeKey, slot) {
+  if (!r || !r.restored || r.freshened) return;
+  r.freshened = "checking";
+  freshenResults(r, storeKey).then((n) => { r.freshened = "done"; r.closedRemoved = n; }, () => { r.freshened = "failed"; }).finally(() => { refreshSlot(slot); if (["", "#/", "#/dashboard"].includes(location.hash)) rerender(); });
+}
+// Saved jobs are kept even when they close, but they are re-checked once a day so the badge is honest.
+async function recheckSaved() {
+  if (S.ui.savedChecked) return; S.ui.savedChecked = true;
+  const due = S.savedJobs.items.filter((j) => /^https?:/.test(j.url || "") && (!j.verified?.checkedAt || Date.now() - new Date(j.verified.checkedAt).getTime() > 24 * 3600000)).slice(0, 60);
+  if (!due.length) return;
+  try {
+    const res = await api("POST", "/api/jobs/verify", { items: due.map((j) => ({ url: j.url, applyUrl: j.applyUrl })) });
+    for (const j of due) { const v = res.results[j.url]; if (v) { j.verified = v; S.ui.verify[j.url] = v; } }
+    save("savedJobs"); redrawJobBadges(due);
+  } catch { /* offline: keep the old badges */ }
 }
 function redrawJobBadges(js) {
   for (const j of js) {
@@ -1445,7 +1505,7 @@ slots.hidden = {
     return `<div class="card"><div class="row small" style="margin-bottom:8px"><b>${r.jobs.length} hidden opportunities</b><span class="muted">${r.restored ? `from your last hunt (${ago(r.at)}). Hunt again for fresh posts.` : `found just now`}</span><span class="grow"></span><button class="btn small ghost" id="hidClear">Clear</button></div>
       ${st.length ? `<div class="chips" style="margin-bottom:10px">${st.map(([id, s]) => `<span class="chip ${s.ok ? "" : "bad"}" title="${esc(s.error || "")}">${esc(names[id] || id)}: ${s.ok ? s.count : "failed"}</span>`).join("")}</div>` : ""}
       ${st.some(([, s]) => s.error) ? `<p class="small muted">${st.filter(([, s]) => s.error).map(([id, s]) => `${esc(names[id] || id)}: ${esc(s.error)}`).join(" · ")}</p>` : ""}
-      <div class="grid cols-3"><div class="field"><label>Minimum fit: <span id="hMinV">${h.minFit}</span></label><input type="range" min="0" max="90" step="5" value="${h.minFit}" id="hMin" style="width:100%"></div><div class="field" style="grid-column:span 2"><label>Filter text</label><input type="search" id="hText" value="${esc(h.text)}" placeholder="e.g. explainer, $, remote"></div></div>
+      <div class="grid cols-3"><div class="field"><label>Minimum fit: <span id="hMinV">${h.minFit}</span></label><input type="range" min="0" max="90" step="5" value="${h.minFit}" id="hMin" style="--p:${(h.minFit / 90) * 100}%"></div><div class="field" style="grid-column:span 2"><label>Filter text</label><input type="search" id="hText" value="${esc(h.text)}" placeholder="e.g. explainer, $, remote"></div></div>
       <div class="small muted" id="hCount"></div></div><div id="hList" style="margin-top:12px"></div>`;
   },
   bind: (el, r) => {
@@ -1463,7 +1523,7 @@ view("jobs", "Jobs", (main, params) => {
   const f = S.ui.searchForm ||= searchDefaults();
   if (!S.results.jobs && S.ui.lastSearch) S.results.jobs = { ...S.ui.lastSearch, status: {}, dropped: {}, restored: true };
   const tab = S.ui.jobsTab;
-  main.innerHTML = `${pageHead("Jobs", "Currently open postings from many boards. Expired and old postings are dropped, duplicates are merged, and each job shows its type, pay, fit and red flags.")}
+  main.innerHTML = `${pageHead("Jobs", "Currently open postings from many boards. Expired and old postings are dropped, the best matches are opened to confirm they are still live, and each job shows how it pays, what it pays, a seven-part fit score and red flags.")}
   <div class="tabs" role="tablist"><button role="tab" aria-selected="${tab !== "saved" && tab !== "hidden"}" data-jt="results">Search</button><button role="tab" aria-selected="${tab === "hidden"}" data-jt="hidden">Hidden opportunities</button><button role="tab" aria-selected="${tab === "saved"}" data-jt="saved">Saved (${S.savedJobs.items.length})</button></div>
   ${tab === "hidden" ? hiddenHTML() : tab === "saved" ? `<div id="savedList">${S.savedJobs.items.length ? S.savedJobs.items.map(jobCardHTML).join("") : '<div class="card empty">No saved jobs yet.</div>'}</div>` : `
   <form class="card" id="searchForm">
@@ -1476,8 +1536,8 @@ view("jobs", "Jobs", (main, params) => {
       <label class="check" style="font-weight:500">Posted within <select name="maxAgeDays" style="width:auto;min-height:32px;margin-left:6px">${[3, 7, 14, 30, 60].map((d) => `<option value="${d}" ${+f.maxAgeDays === d ? "selected" : ""}>${d} days</option>`).join("")}</select></label>
     </div>
     <details><summary class="small" style="cursor:pointer">Types and sources</summary>
-      <div style="margin-top:10px"><label>Job types <span class="hint">none checked = all</span></label>${JOB_TYPES.filter((t) => t !== "Unspecified").map((t) => `<label class="check"><input type="checkbox" name="types" value="${t}" ${f.types.includes(t) ? "checked" : ""}>${t}</label>`).join("")}</div>
-      <div style="margin-top:8px"><label>Sources</label>${(S.status.sources || []).map((s) => `<label class="check" title="${esc(s.note)}"><input type="checkbox" name="sources" value="${s.id}" ${f.sources.includes(s.id) ? "checked" : ""} ${s.active ? "" : "disabled"}>${esc(s.name)}${s.active ? "" : ` <span class="hint">(${s.id === "web" ? "needs Claude" : "needs key"})</span>`}${s.id === "web" && s.active ? ' <span class="hint">(uses API credit)</span>' : ""}</label>`).join("")}</div>
+      <div style="margin-top:10px"><label>Job types <span class="hint">none checked = all</span></label><div class="checks">${JOB_TYPES.filter((t) => t !== "Unspecified").map((t) => `<label class="check"><input type="checkbox" name="types" value="${t}" ${f.types.includes(t) ? "checked" : ""}>${t}</label>`).join("")}</div></div>
+      <div style="margin-top:12px"><label>Sources</label><div class="checks wide">${(S.status.sources || []).map((s) => `<label class="check" title="${esc(s.note)}"><input type="checkbox" name="sources" value="${s.id}" ${f.sources.includes(s.id) ? "checked" : ""} ${s.active ? "" : "disabled"}>${esc(s.name)}${s.active ? "" : ` <span class="hint">(${s.id === "web" ? "needs Claude" : "needs key"})</span>`}${s.id === "web" && s.active ? ' <span class="hint">(uses API credit)</span>' : ""}</label>`).join("")}</div></div>
     </details>
     <div class="row" style="margin-top:12px"><button class="btn primary" type="submit">Search</button><button class="btn ghost" type="button" id="resetSearch">Reset to focus</button></div>
   </form>
@@ -1485,6 +1545,7 @@ view("jobs", "Jobs", (main, params) => {
 
   $$("[data-jt]", main).forEach((b) => b.addEventListener("click", () => { S.ui.jobsTab = b.dataset.jt; history.replaceState(null, "", "#/jobs"); rerender(); }));
   bindJobActions(main);
+  if (tab === "saved") recheckSaved();
   if (tab === "hidden") { bindHidden(main); return; }
   const form = $("#searchForm");
   if (!form) return;
@@ -1504,7 +1565,8 @@ slots.jobs = {
     const srcs = [...new Set(r.jobs.map((j) => j.source))];
     const st = Object.entries(r.status || {});
     return `<div class="card">
-      <div class="row small" style="margin-bottom:8px"><b>${r.jobs.length} open jobs</b><span class="muted">${r.restored ? `from your last search (${ago(r.at)}). Search again for fresh results.` : `searched ${r.total ?? "?"} postings · dropped ${r.dropped?.stale || 0} old, ${r.dropped?.expired || 0} expired, ${r.dropped?.offTopic || 0} off-topic`}</span></div>
+      <div class="row small" style="margin-bottom:8px"><b>${r.jobs.length} open jobs</b><span class="muted">${r.restored ? `from your last search (${ago(r.at)}). Search again for fresh results.` : `searched ${r.total ?? "?"} postings · dropped ${r.dropped?.stale || 0} old, ${r.dropped?.expired || 0} expired, ${r.dropped?.closed || 0} closed, ${r.dropped?.offTopic || 0} off-topic`}</span></div>
+      ${r.restored ? (r.freshened === "checking" ? `<p class="small muted"><span class="spinner" style="display:inline-block;width:12px;height:12px;border-width:2px;vertical-align:-2px;margin-right:6px"></span>Opening these postings again to make sure they are still live…</p>` : r.freshened === "done" ? `<p class="small muted">Re-checked just now${r.closedRemoved ? `: removed ${r.closedRemoved} posting${r.closedRemoved > 1 ? "s" : ""} that closed since your last search` : ": the top matches are all still open"}.</p>` : "") : r.verified ? `<p class="small muted">The top ${r.verified} matches were opened just now to confirm they are still accepting applications${r.dropped?.closed ? `; ${r.dropped.closed} that had closed were removed` : ""}.</p>` : ""}
       ${st.length ? `<div class="chips" style="margin-bottom:10px">${st.map(([id, s]) => `<span class="chip ${s.ok ? "" : "bad"}" title="${esc(s.error || "")}">${esc((S.status.sources.find((x) => x.id === id) || {}).name || id)}: ${s.ok ? s.count : "failed"}</span>`).join("")}</div>` : ""}
       ${st.some(([, s]) => !s.ok) ? `<p class="small muted">Failed sources are usually temporary (site down or rate limit). Hover a red chip for the reason.</p>` : ""}
       <div class="grid cols-4" id="jobFilters">
@@ -1512,16 +1574,17 @@ slots.jobs = {
         <div class="field"><label>Remote</label><select data-f="remote"><option value="">Any</option><option value="remote" ${fl.remote === "remote" ? "selected" : ""}>Remote</option><option value="onsite" ${fl.remote === "onsite" ? "selected" : ""}>On-site / hybrid</option></select></div>
         <div class="field"><label>Source</label><select data-f="source"><option value="">All sources</option>${srcs.map((s) => `<option ${fl.source === s ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></div>
         <div class="field"><label>Posted within</label><select data-f="within"><option value="0">Any</option>${[1, 3, 7, 14, 30].map((d) => `<option value="${d}" ${+fl.within === d ? "selected" : ""}>${d} day${d > 1 ? "s" : ""}</option>`).join("")}</select></div>
-        <div class="field"><label>Minimum fit: <span id="minFitV">${fl.minFit}</span></label><input type="range" min="0" max="90" step="5" value="${fl.minFit}" data-f="minFit" style="width:100%;accent-color:var(--accent)"></div>
+        <div class="field"><label>Minimum fit: <span id="minFitV">${fl.minFit}</span></label><input type="range" min="0" max="90" step="5" value="${fl.minFit}" data-f="minFit" style="--p:${(fl.minFit / 90) * 100}%"></div>
         <div class="field"><label>Highest level to show</label><select data-f="maxLevel"><option value="any">Any level</option>${LEVELS.filter((l) => l.rank >= 1 && l.rank <= 5).map((l) => `<option value="${l.id}" ${fl.maxLevel === l.id ? "selected" : ""}>${{ entry: "Entry / junior only", mid: "Up to mid-level (hide senior+)", senior: "Up to senior (hide lead+)", lead: "Up to lead (hide directors+)", director: "Up to director (hide VP+)" }[l.id]}</option>`).join("")}</select></div>
         <div class="field"><label>Level options</label><div><label class="check" style="margin:0 0 4px"><input type="checkbox" data-f="hideIntern" ${fl.hideIntern ? "checked" : ""}>Hide internships</label><label class="check" style="margin:0" title="Many postings never state a level. Untick to hide them."><input type="checkbox" data-f="showUnknown" ${fl.showUnknown ? "checked" : ""}>Include jobs that don't say</label></div></div>
         <div class="field"><label>Sort</label><select data-f="sort"><option value="fit">Best fit</option><option value="new" ${fl.sort === "new" ? "selected" : ""}>Newest</option></select></div>
         <div class="field" style="grid-column:span 2"><label>Filter text</label><input type="search" data-f="text" value="${esc(fl.text)}" placeholder="${esc(fh("filter"))}"></div>
       </div>
-      <div class="row"><span class="small muted" id="shownCount"></span><span class="grow"></span><button class="btn small" id="verifyAll">Verify all shown</button></div>
+      <div class="row"><span class="small muted" id="shownCount"></span><span class="grow"></span><button class="btn small" id="verifyAll">Re-check all shown</button></div>
     </div><div id="jobList" style="margin-top:12px"></div>`;
   },
   bind: (el, r) => {
+    freshenOnce(r, "lastSearch", "jobs");
     const draw = () => {
       const js = filteredJobs(r.jobs);
       const hiddenByLevel = filteredJobs(r.jobs, { ignoreLevel: true }).length - js.length;

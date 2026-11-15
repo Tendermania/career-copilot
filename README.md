@@ -167,3 +167,9 @@ public/          the UI (index.html, styles.css, app.js); no build step
 API (all JSON, localhost only): `GET /api/status`, `GET /api/sources`,
 `GET|PUT /api/state/:key`, `POST /api/parse`, `POST /api/ats`, `POST /api/ai/:task`,
 `POST /api/jobs/search`, `POST /api/jobs/verify`, `POST /api/export/docx`.
+
+## Jobs: open postings, pay and fit
+
+- **Still open.** After a search the best matches are opened one by one (the listing and, when it is on another site, the employer's apply page) and anything closed is dropped: removed pages, "position filled" notices, a passed closing date in the page's job data, or a redirect to the general careers page. Results kept from an earlier visit are re-checked when you come back, and saved jobs are re-checked once a day (closed ones stay saved but are badged). Sites that block automated checks show "Couldn't confirm it's open".
+- **Pay.** Every job says how it pays (salaried, hourly, day rate, monthly, per project) and the figure the posting states, taken from the listing's pay field or found in the description, with a full-time yearly equivalent for hourly and day rates. When no figure is given it says so and marks the pay type as "likely". Figures are never invented.
+- **Fit.** The score is the sum of seven parts: role match (30), skills and tools (25, required counts more than nice-to-have), level and years (15), work setup and location (10), job type (8), pay against your minimum (7) and industry (5), minus penalties for avoided words and scam or unpaid-work wording. A posting whose title is a different job is capped at 40. Each card shows the parts under "How this score was worked out". It uses your active focus, Preferences, profile location and the dates on your active resume.

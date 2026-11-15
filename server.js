@@ -7,7 +7,8 @@ import { spawn } from "node:child_process";
 import { loadDotEnv, read, write, isAllowedKey, settings, DEFAULT_BOARDS } from "./lib/store.js";
 import { analyze } from "./lib/ats.js";
 import { findAiTells, findSkills, norm, AI_TELLS } from "./lib/text.js";
-import { searchJobs, verifyPosting, SOURCE_INFO, classifyType, flagsFor } from "./lib/jobs.js";
+import { searchJobs, verifyPosting, pruneClosed, assess, SOURCE_INFO } from "./lib/jobs.js";
+import { experienceYears } from "./lib/fit.js";
 import { parseUpload, resumeToDocx, coverLetterToDocx, resumeToText } from "./lib/files.js";
 import { tasks, aiStatus, requireAi } from "./lib/ai.js";
 import { COMPAT, fieldsFor, providerList } from "./lib/providers.js";
@@ -245,7 +246,13 @@ function searchProfile() {
   const resume = activeResume();
   const text = resume ? resume.text || (resume.structured ? resumeToText(resume.structured) : "") : "";
   const skills = [...new Set([...findSkills(text), ...findSkills((focus.keywords || []).join(", "))])];
-  return { targetRoles: focus.roles || [], keywords: focus.keywords || [], avoidKeywords: focus.avoidKeywords || [], skills };
+  const prefs = profile.preferences || {};
+  return {
+    targetRoles: focus.roles || [], keywords: focus.keywords || [], avoidKeywords: focus.avoidKeywords || [], skills,
+    industries: focus.industries || [], seniorityText: focus.seniority || "", years: experienceYears(text), homeLocation: profile.location || "",
+    prefs: { workplace: prefs.workplace || [], types: prefs.types || [], minPay: prefs.minPay || "", locations: prefs.locations || "" },
+    hasResume: !!text,
+  };
 }
 
 // ---------- Routes ----------
@@ -419,20 +426,24 @@ route("POST", /^\/api\/jobs\/search$/, async (req, m, body) => {
     if (web.ok) {
       const list = Array.isArray(web.r.data?.jobs) ? web.r.data.jobs : [];
       const seen = new Set(main.jobs.map((j) => `${key(j.title)}|${key(j.company)}`));
-      let added = 0;
+      const fresh = [];
       for (const w of list) {
         if (!w.url || !w.title) continue;
         const k = `${key(w.title)}|${key(w.company)}`;
         if (seen.has(k)) continue;
         seen.add(k);
         const j = { id: `Web:${w.url}`, source: "AI web search", via: w.source || "", title: w.title, company: w.company || "", location: w.location || "", remote: /remote/i.test(w.location || ""), rawType: w.employmentType || "", salary: w.salary || "", postedAt: Date.parse(w.posted) ? new Date(w.posted).toISOString() : null, postedText: w.posted || "", expiresAt: null, url: w.url, applyUrl: w.url, description: w.whyRelevant || "", tags: [] };
-        j.type = classifyType(j);
+        assess(j, profile);
         if (q.types?.length && !q.types.includes(j.type)) continue;
-        j.flags = flagsFor(j);
-        j.fit = { score: 50, why: [w.whyRelevant || "found by web search"].filter(Boolean), jobSkills: [], missingSkills: [] };
-        main.jobs.push(j);
-        added++;
+        if (w.whyRelevant) j.fit.why.unshift(w.whyRelevant);
+        fresh.push(j);
       }
+      // Search results can point at postings that have since closed: open each one before showing it.
+      const live = await pruneClosed(fresh, { limit: 30 });
+      main.jobs.push(...live.jobs);
+      main.jobs.sort((a, b) => b.fit.score - a.fit.score);
+      main.dropped = { ...main.dropped, closed: (main.dropped?.closed || 0) + live.closed };
+      const added = live.jobs.length;
       main.status.web = { ok: true, count: added };
     } else {
       main.status.web = { ok: false, error: friendly(web.e).error };
@@ -442,18 +453,20 @@ route("POST", /^\/api\/jobs\/search$/, async (req, m, body) => {
 });
 
 route("POST", /^\/api\/jobs\/verify$/, async (req, m, body) => {
-  if (Array.isArray(body.urls)) {
-    const urls = body.urls.slice(0, 60);
+  // items: [{url, applyUrl}] (or the older urls: []). The apply page is checked too when it lives on another site.
+  const items = Array.isArray(body.items) ? body.items : Array.isArray(body.urls) ? body.urls.map((url) => ({ url })) : null;
+  if (items) {
+    const list = items.slice(0, 80).filter((x) => x && x.url);
     const out = {};
     // Small batches so we don't hammer any one site.
-    for (let i = 0; i < urls.length; i += 6) {
-      const part = await Promise.all(urls.slice(i, i + 6).map((u) => verifyPosting(u)));
-      urls.slice(i, i + 6).forEach((u, k) => (out[u] = part[k]));
+    for (let i = 0; i < list.length; i += 8) {
+      const part = await Promise.all(list.slice(i, i + 8).map((x) => verifyPosting(x.url, x.applyUrl, { timeout: 10000 })));
+      list.slice(i, i + 8).forEach((x, k) => (out[x.url] = part[k]));
     }
     return { results: out };
   }
-  if (!body.url) throw fail(400, "Send {url} or {urls: []}.");
-  return verifyPosting(body.url);
+  if (!body.url) throw fail(400, "Send {url} or {items: [{url, applyUrl}]}.");
+  return verifyPosting(body.url, body.applyUrl);
 });
 
 route("POST", /^\/api\/export\/docx$/, async (req, m, body) => {
