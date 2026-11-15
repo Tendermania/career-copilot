@@ -1858,7 +1858,7 @@ view("settings", "Settings", async (main) => {
 
 // ================= Boot =================
 function applyTheme() {
-  const t = ls.get("theme", "system");
+  const t = ls.get("theme", "dark");
   if (t === "system") document.documentElement.removeAttribute("data-theme");
   else document.documentElement.dataset.theme = t;
 }
