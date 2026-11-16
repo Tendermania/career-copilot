@@ -1272,7 +1272,7 @@ S.ui.verify = {};
 function searchDefaults() {
   const f = activeFocus();
   const src = (S.status.sources || []).filter((s) => s.active && s.id !== "web").map((s) => s.id);
-  return { queries: (f.roles || []).slice(0, 3).join(", "), location: "", remoteOnly: false, maxAgeDays: 14, types: [], sources: src };
+  return { queries: (f.roles || []).slice(0, 3).join(", "), location: "", remoteOnly: false, maxAgeDays: 14, types: [], gigs: true, sources: src };
 }
 
 async function runSearch() {
@@ -1286,7 +1286,7 @@ async function runSearch() {
   refreshSlot(key);
   updateNavBusy();
   try {
-    const r = await api("POST", "/api/jobs/search", { queries: csv(f.queries), location: f.location, remoteOnly: f.remoteOnly, maxAgeDays: Number(f.maxAgeDays), types: f.types, sources: f.sources }, { signal: ctrl.signal });
+    const r = await api("POST", "/api/jobs/search", { queries: csv(f.queries), location: f.location, remoteOnly: f.remoteOnly, maxAgeDays: Number(f.maxAgeDays), types: f.types, gigs: !!f.gigs, sources: f.sources }, { signal: ctrl.signal });
     r.at = new Date().toISOString();
     S.results.jobs = r;
     S.ui.lastSearch = { at: r.at, jobs: r.jobs.slice(0, 120).map((j) => ({ ...j, description: j.description.slice(0, 1500) })) };
@@ -1300,7 +1300,29 @@ async function runSearch() {
   }
 }
 
+function agencyPanelHTML(f) {
+  const list = S.status.agencies || [];
+  if (!list.length) return "";
+  const role = csv(f.queries)[0] || "motion designer";
+  const link = (a) => `https://www.google.com/search?q=${encodeURIComponent(`${a.name.replace(/\s*\(.*\)/, "")} ${role} contract OR freelance jobs`)}`;
+  return `<details class="card" style="margin-top:14px"><summary class="small" style="cursor:pointer"><span>Target agencies &amp; staffing firms <span class="hint">where contract gigs come from</span></span></summary>
+    <p class="small muted" style="margin:8px 0">Searches run in a new tab for “${esc(role)}”. Register with several staffing agencies: their recruiters call you when a contract opens. Also add studios you like to the company boards in Settings.</p>
+    <div class="row" style="gap:8px">${list.map((a) => `<a class="btn small" target="_blank" rel="noopener" href="${esc(link(a))}" title="${esc(a.note)}">${esc(a.name)}</a>`).join("")}</div></details>`;
+}
+
 const isSaved = (id) => S.savedJobs.items.some((j) => j.id === id);
+
+const REGION_CLASS = { us: "good", abroad: "warn", mixed: "info", global: "info", unknown: "" };
+function regionBadge(j) {
+  const r = j.region || { id: "unknown", label: "Location unclear", note: "Search again to see where this job is based." };
+  const flag = { us: "🇺🇸 ", abroad: "🌍 ", global: "🌐 " }[r.id] || "";
+  return `<span class="badge ${REGION_CLASS[r.id] || ""}" title="${esc(r.note)}">${flag}${esc(r.label)}</span>`;
+}
+const EMPLOYER_LABEL = { staffing: "Staffing agency", agency: "Agency / studio" };
+function employerBadge(j) {
+  const l = EMPLOYER_LABEL[j.employerKind];
+  return l ? `<span class="badge accent" title="${j.employerKind === "staffing" ? "A staffing or recruiting firm placing contractors with its clients" : "A creative agency or studio that may hire freelancers"}">${l}</span>` : "";
+}
 
 function jobCardHTML(j) {
   jobIndex.set(j.id, j);
@@ -1310,7 +1332,7 @@ function jobCardHTML(j) {
   return `<article class="card job" data-job="${esc(j.id)}">
     <div><h3><a href="${esc(j.applyUrl || j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a></h3>
       <div class="meta"><b>${esc(j.company)}</b><span>${esc(j.location || "")}</span>${j.salary ? `<span>${esc(j.salary)}</span>` : ""}<span>${j.postedAt ? ago(j.postedAt) : esc(j.postedText || "date unknown")}</span></div>
-      <div class="row" style="margin-top:6px;gap:6px"><span class="badge ${typeClass}">${esc(j.type)}</span>${levelOf(j).id !== "unknown" ? `<span class="badge ${levelOf(j).rank >= 3 ? "warn" : "accent"}" title="${esc(levelOf(j).why)}">${esc(levelOf(j).label)}</span>` : ""}${j.remote ? '<span class="badge info">Remote</span>' : ""}${j.hidden ? '<span class="badge accent" title="Found in a post or thread, not on a job board">Hidden find</span>' : ""}<span class="badge">${esc(j.source)}${j.via ? ` · ${esc(j.via)}` : ""}</span>${(j.alsoOn || []).length ? `<span class="badge" title="Also listed on">also on ${esc(j.alsoOn.join(", "))}</span>` : ""}${vBadge}</div>
+      <div class="row" style="margin-top:6px;gap:6px"><span class="badge ${typeClass}">${esc(j.type)}</span>${levelOf(j).id !== "unknown" ? `<span class="badge ${levelOf(j).rank >= 3 ? "warn" : "accent"}" title="${esc(levelOf(j).why)}">${esc(levelOf(j).label)}</span>` : ""}${regionBadge(j)}${employerBadge(j)}${j.remote ? '<span class="badge info">Remote</span>' : ""}${j.hidden ? '<span class="badge accent" title="Found in a post or thread, not on a job board">Hidden find</span>' : ""}<span class="badge">${esc(j.source)}${j.via ? ` · ${esc(j.via)}` : ""}</span>${(j.alsoOn || []).length ? `<span class="badge" title="Also listed on">also on ${esc(j.alsoOn.join(", "))}</span>` : ""}${vBadge}</div>
     </div>
     <div class="side">${scoreRing(j.fit?.score ?? 0, true)}<span class="small muted">fit</span></div>
     <div class="full small">${(j.fit?.why || []).length ? `<span class="muted">Why: ${esc(j.fit.why.join(" · "))}</span>` : ""}${j.fit?.missingSkills?.length ? `<div class="muted">Skills they list that you haven't: ${esc(j.fit.missingSkills.slice(0, 6).join(", "))}</div>` : ""}</div>
@@ -1387,11 +1409,13 @@ function bindJobActions(root) {
   });
 }
 
-const jfDefaults = () => ({ type: "", remote: "", source: "", minFit: 0, within: 0, text: "", sort: "fit", maxLevel: maxLevelFromText(activeFocus().seniority), hideIntern: false, showUnknown: true });
+const jfDefaults = () => ({ type: "", remote: "", region: "", employer: "", source: "", minFit: 0, within: 0, text: "", sort: "fit", maxLevel: maxLevelFromText(activeFocus().seniority), hideIntern: false, showUnknown: true });
+
+const regionOk = (j, want) => !want || (want === "us" ? ["us", "mixed"].includes(j.region?.id) : want === "abroad" ? ["abroad", "mixed", "global"].includes(j.region?.id) : j.region?.id === want);
 
 function filteredJobs(all, { ignoreLevel = false } = {}) {
   const f = S.ui.jf ||= jfDefaults();
-  let js = all.filter((j) => (!f.type || j.type === f.type) && (!f.remote || (f.remote === "remote" ? j.remote : !j.remote)) && (!f.source || j.source === f.source) && (j.fit?.score ?? 0) >= f.minFit && (!f.within || !j.postedAt || Date.now() - new Date(j.postedAt).getTime() <= f.within * 86400000) && (ignoreLevel || passesLevel(j, f)));
+  let js = all.filter((j) => (!f.type || j.type === f.type) && (!f.remote || (f.remote === "remote" ? j.remote : !j.remote)) && (!f.source || j.source === f.source) && regionOk(j, f.region) && (!f.employer || (f.employer === "agencies" ? ["agency", "staffing"].includes(j.employerKind) : j.employerKind === f.employer)) && (j.fit?.score ?? 0) >= f.minFit && (!f.within || !j.postedAt || Date.now() - new Date(j.postedAt).getTime() <= f.within * 86400000) && (ignoreLevel || passesLevel(j, f)));
   if (f.text) { const t = f.text.toLowerCase(); js = js.filter((j) => `${j.title} ${j.company} ${j.location} ${j.description}`.toLowerCase().includes(t)); }
   if (f.sort === "new") js = [...js].sort((a, b) => new Date(b.postedAt || 0) - new Date(a.postedAt || 0));
   return js;
@@ -1473,7 +1497,8 @@ view("jobs", "Jobs", (main, params) => {
     </div>
     <div class="row" style="margin-bottom:8px">
       <label class="check"><input type="checkbox" name="remoteOnly" ${f.remoteOnly ? "checked" : ""}>Remote only</label>
-      <label class="check" style="font-weight:500">Posted within <select name="maxAgeDays" style="width:auto;min-height:32px;margin-left:6px">${[3, 7, 14, 30, 60].map((d) => `<option value="${d}" ${+f.maxAgeDays === d ? "selected" : ""}>${d} days</option>`).join("")}</select></label>
+      <label class="check" title="Also searches “freelance …” and “contract …” versions of your searches, and keeps agency, studio and staffing-firm postings. Use the Posted by filter on the results to narrow to agencies."><input type="checkbox" name="gigs" ${f.gigs ? "checked" : ""}>Include agencies &amp; short-term gigs</label>
+      <label class="check posted-within">Posted within <select name="maxAgeDays" class="select-sm">${[3, 7, 14, 30, 60].map((d) => `<option value="${d}" ${+f.maxAgeDays === d ? "selected" : ""}>${d} days</option>`).join("")}</select></label>
     </div>
     <details><summary class="small" style="cursor:pointer">Types and sources</summary>
       <div style="margin-top:10px"><label>Job types <span class="hint">none checked = all</span></label>${JOB_TYPES.filter((t) => t !== "Unspecified").map((t) => `<label class="check"><input type="checkbox" name="types" value="${t}" ${f.types.includes(t) ? "checked" : ""}>${t}</label>`).join("")}</div>
@@ -1481,6 +1506,7 @@ view("jobs", "Jobs", (main, params) => {
     </details>
     <div class="row" style="margin-top:12px"><button class="btn primary" type="submit">Search</button><button class="btn ghost" type="button" id="resetSearch">Reset to focus</button></div>
   </form>
+  ${agencyPanelHTML(f)}
   <div style="margin-top:14px">${slotHTML("jobs")}</div>`}`;
 
   $$("[data-jt]", main).forEach((b) => b.addEventListener("click", () => { S.ui.jobsTab = b.dataset.jt; history.replaceState(null, "", "#/jobs"); rerender(); }));
@@ -1490,7 +1516,7 @@ view("jobs", "Jobs", (main, params) => {
   if (!form) return;
   form.addEventListener("change", () => {
     const fd = new FormData(form);
-    Object.assign(f, { queries: fd.get("queries"), location: fd.get("location"), remoteOnly: !!fd.get("remoteOnly"), maxAgeDays: fd.get("maxAgeDays"), types: fd.getAll("types"), sources: fd.getAll("sources") });
+    Object.assign(f, { queries: fd.get("queries"), location: fd.get("location"), remoteOnly: !!fd.get("remoteOnly"), gigs: !!fd.get("gigs"), maxAgeDays: fd.get("maxAgeDays"), types: fd.getAll("types"), sources: fd.getAll("sources") });
   });
   form.addEventListener("input", (e) => { if (e.target.name === "queries" || e.target.name === "location") f[e.target.name] = e.target.value; });
   form.addEventListener("submit", (e) => { e.preventDefault(); form.dispatchEvent(new Event("change")); if (!f.sources.length) return toast("Pick at least one source.", "bad"); runSearch(); });
@@ -1510,6 +1536,8 @@ slots.jobs = {
       <div class="grid cols-4" id="jobFilters">
         <div class="field"><label>Type</label><select data-f="type"><option value="">All types</option>${JOB_TYPES.map((t) => `<option ${fl.type === t ? "selected" : ""}>${t}</option>`).join("")}</select></div>
         <div class="field"><label>Remote</label><select data-f="remote"><option value="">Any</option><option value="remote" ${fl.remote === "remote" ? "selected" : ""}>Remote</option><option value="onsite" ${fl.remote === "onsite" ? "selected" : ""}>On-site / hybrid</option></select></div>
+        <div class="field"><label>Where <span class="hint">affects rates</span></label><select data-f="region">${[["", "Anywhere"], ["us", "US only"], ["abroad", "Abroad (incl. remote anywhere)"], ["global", "Remote, open to anywhere"], ["unknown", "Location unclear"]].map(([v, l]) => `<option value="${v}" ${fl.region === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+        <div class="field"><label>Posted by</label><select data-f="employer">${[["", "Anyone"], ["agencies", "Agencies, studios & staffing"], ["agency", "Creative agencies / studios"], ["staffing", "Staffing & recruiters"], ["direct", "Direct employers"]].map(([v, l]) => `<option value="${v}" ${fl.employer === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
         <div class="field"><label>Source</label><select data-f="source"><option value="">All sources</option>${srcs.map((s) => `<option ${fl.source === s ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></div>
         <div class="field"><label>Posted within</label><select data-f="within"><option value="0">Any</option>${[1, 3, 7, 14, 30].map((d) => `<option value="${d}" ${+fl.within === d ? "selected" : ""}>${d} day${d > 1 ? "s" : ""}</option>`).join("")}</select></div>
         <div class="field"><label>Minimum fit: <span id="minFitV">${fl.minFit}</span></label><input type="range" min="0" max="90" step="5" value="${fl.minFit}" data-f="minFit" style="width:100%;accent-color:var(--accent)"></div>

@@ -16,7 +16,10 @@ browser UI. Built for motion designers first, and works for any field.
   JSearch (LinkedIn/Indeed/Glassdoor via Google for Jobs) and USAJOBS. An optional AI web search
   covers studio sites and niche boards (Motionographer, School of Motion, ProductionHUB…).
   Expired and old postings are dropped and duplicates merged. Each job shows its type
-  (full-time, contract, freelance…), pay, fit score and red flags. A "Verify still open"
+  (full-time, contract, freelance…), whether it's **in the US or abroad** (rates differ), who posted it
+  (direct employer, agency/studio, or staffing firm), pay, fit score and red flags. **Include agencies & short-term
+  gigs** also searches "freelance …" and "contract …" variants; filter results by *Where* and *Posted by*, and use
+  *Target agencies & staffing firms* for quick searches on creative staffing agencies. A "Verify still open"
   check is built in.
 - **Hidden opportunities** (Jobs → Hidden opportunities): the openings job boards never show you. Reads public
   hiring posts on Reddit, Hacker News "Who is hiring?" and "Seeking freelancer?" threads, and Mastodon

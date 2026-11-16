@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { loadDotEnv, read, write, isAllowedKey, settings, DEFAULT_BOARDS } from "./lib/store.js";
 import { analyze } from "./lib/ats.js";
 import { findAiTells, findSkills, norm, AI_TELLS } from "./lib/text.js";
-import { searchJobs, verifyPosting, SOURCE_INFO, classifyType, flagsFor } from "./lib/jobs.js";
+import { searchJobs, verifyPosting, SOURCE_INFO, AGENCY_DIRECTORY, annotate } from "./lib/jobs.js";
 import { parseUpload, resumeToDocx, coverLetterToDocx, resumeToText } from "./lib/files.js";
 import { tasks, aiStatus, requireAi } from "./lib/ai.js";
 import { COMPAT, fieldsFor, providerList } from "./lib/providers.js";
@@ -267,6 +267,7 @@ route("GET", /^\/api\/status$/, () => {
     resumes: (r.items || []).length,
     activeResumeId: r.activeId,
     sources: sourcesStatus(),
+    agencies: AGENCY_DIRECTORY,
     aiTells: AI_TELLS,
     version: "1.0.0",
   };
@@ -413,7 +414,7 @@ route("POST", /^\/api\/jobs\/search$/, async (req, m, body) => {
   const listSources = (q.sources || []).filter((x) => x !== "web");
   const [main, web] = await Promise.all([
     listSources.length || !q.sources?.length ? searchJobs({ ...q, sources: listSources }, s, profile) : Promise.resolve({ jobs: [], status: {}, dropped: {}, total: 0 }),
-    wantWeb ? tasks.webJobSearch({ profile: read("profile", {}), queries: q.queries, location: q.location, maxAgeDays: q.maxAgeDays || 30, remoteOnly: q.remoteOnly }).then((r) => ({ ok: true, r }), (e) => ({ ok: false, e })) : null,
+    wantWeb ? tasks.webJobSearch({ profile: read("profile", {}), queries: q.queries, location: q.location, maxAgeDays: q.maxAgeDays || 30, remoteOnly: q.remoteOnly, gigs: q.gigs }).then((r) => ({ ok: true, r }), (e) => ({ ok: false, e })) : null,
   ]);
   if (web) {
     if (web.ok) {
@@ -426,9 +427,10 @@ route("POST", /^\/api\/jobs\/search$/, async (req, m, body) => {
         if (seen.has(k)) continue;
         seen.add(k);
         const j = { id: `Web:${w.url}`, source: "AI web search", via: w.source || "", title: w.title, company: w.company || "", location: w.location || "", remote: /remote/i.test(w.location || ""), rawType: w.employmentType || "", salary: w.salary || "", postedAt: Date.parse(w.posted) ? new Date(w.posted).toISOString() : null, postedText: w.posted || "", expiresAt: null, url: w.url, applyUrl: w.url, description: w.whyRelevant || "", tags: [] };
-        j.type = classifyType(j);
+        annotate(j);
         if (q.types?.length && !q.types.includes(j.type)) continue;
-        j.flags = flagsFor(j);
+        if (q.employers?.length && !q.employers.includes(j.employerKind)) continue;
+        if (q.regions?.length && !q.regions.includes(j.region.id)) continue;
         j.fit = { score: 50, why: [w.whyRelevant || "found by web search"].filter(Boolean), jobSkills: [], missingSkills: [] };
         main.jobs.push(j);
         added++;

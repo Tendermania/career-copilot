@@ -424,3 +424,7 @@ dialog .dlg-foot { padding: 12px 20px; border-top: 1px solid var(--border); disp
   /* breathing room between an info bar and whatever follows it */
   .notice + *:not([hidden]) { margin-top: 14px; }
 }
+
+/* Compact dropdown next to a label ("Posted within [14 days v]"): never shrink, never clip the chevron or border. */
+.posted-within { flex-wrap: nowrap; white-space: nowrap; }
+select.select-sm { flex: none; width: auto; min-width: 118px; max-width: none; box-sizing: border-box; min-height: 34px; margin-left: 6px; padding: 5px 38px 5px 12px; font-weight: 500; text-overflow: clip; overflow: visible; background-position: right 13px center; }
