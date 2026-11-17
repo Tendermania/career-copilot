@@ -22,7 +22,7 @@ browser UI. Built for motion designers first, and works for any field.
   *Target agencies & staffing firms* for quick searches on creative staffing agencies. A "Verify still open"
   check is built in.
 - **Hidden opportunities** (Jobs → Hidden opportunities): the openings job boards never show you. Reads public
-  hiring posts on Reddit, Hacker News "Who is hiring?" and "Seeking freelancer?" threads, and Mastodon
+  hiring posts on Hacker News "Who is hiring?" and "Seeking freelancer?" threads, and Mastodon
   hashtags, ranks them against your active focus, flags unpaid or exposure-only asks, and lets you track or
   write outreach for them like any other job. An optional **AI web hunt** (Claude API key) searches the open web
   for obscure postings (forums, social posts, studio "freelancers wanted" pages, niche newsletters).

@@ -336,7 +336,7 @@ route("POST", /^\/api\/focuses\/suggest$/, async (req, m, body) => {
 });
 route("GET", /^\/api\/focuses\/presets$/, () => ({ presets: PRESETS.map((p) => toFocus(p)) }));
 
-// Hidden opportunities: posts and threads that never reach job boards (Reddit, Hacker News, Mastodon, plus an optional Claude web hunt).
+// Hidden opportunities: posts and threads that never reach job boards (Hacker News, Mastodon, plus an optional Claude web hunt).
 route("POST", /^\/api\/hidden\/search$/, async (req, m, body) => {
   const profile = read("profile", {});
   const focus = activeFocus(profile);

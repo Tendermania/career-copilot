@@ -1482,10 +1482,10 @@ function filteredJobs(all, { ignoreLevel = false } = {}) {
 }
 
 // ================= Hidden opportunities =================
-// Posts and threads that never reach a job board: Reddit hiring posts, Hacker News "who is hiring" and
+// Posts and threads that never reach a job board: Hacker News "who is hiring" and
 // freelancer threads, Mastodon hashtags, plus an optional Claude web hunt.
-const HID_SOURCES = [["reddit", "Reddit", "hiring posts in r/forhire, r/DesignJobs and subreddits for your field"], ["hn", "Hacker News", "“Who is hiring?” and “Seeking freelancer?” threads"], ["mastodon", "Mastodon", "public #hiring and field hashtags"]];
-const hidDefaults = () => { const f = activeFocus(); return { queries: [...(f.roles || []).slice(0, 4), ...(f.keywords || []).slice(0, 4)].join(", "), maxAgeDays: 30, sources: ["reddit", "hn", "mastodon"], minFit: 0, text: "" }; };
+const HID_SOURCES = [["hn", "Hacker News", "“Who is hiring?” and “Seeking freelancer?” threads"], ["mastodon", "Mastodon", "public #hiring and field hashtags"]];
+const hidDefaults = () => { const f = activeFocus(); return { queries: [...(f.roles || []).slice(0, 4), ...(f.keywords || []).slice(0, 4)].join(", "), maxAgeDays: 30, sources: ["hn", "mastodon"], minFit: 0, text: "" }; };
 
 function hiddenHTML() {
   const h = S.ui.hid ||= hidDefaults(); const web = S.status.ai?.webSearch && S.status.aiReady;
@@ -1506,7 +1506,7 @@ function hiddenHTML() {
 async function runHidden() {
   const h = S.ui.hid, key = "hidden"; if (S.pending[key]) return;
   const ctrl = new AbortController(); const ai = h.sources.includes("ai");
-  S.pending[key] = { label: ai ? "Reading Reddit, Hacker News and Mastodon, and Claude is searching the open web…" : "Reading Reddit, Hacker News and Mastodon…", expect: ai ? 90 : 20, t0: Date.now(), ctrl };
+  S.pending[key] = { label: ai ? "Reading Hacker News and Mastodon, and Claude is searching the open web…" : "Reading Hacker News and Mastodon…", expect: ai ? 90 : 20, t0: Date.now(), ctrl };
   delete S.errors[key]; refreshSlot(key); updateNavBusy();
   try {
     const r = await api("POST", "/api/hidden/search", { queries: csv(h.queries), maxAgeDays: Number(h.maxAgeDays), sources: h.sources }, { signal: ctrl.signal });
@@ -1523,9 +1523,9 @@ function bindHidden(main) {
 }
 
 slots.hidden = {
-  empty: () => `<div class="card empty">Hunt to see openings from posts and threads. Reddit, Hacker News and Mastodon work without any keys.</div>`,
+  empty: () => `<div class="card empty">Hunt to see openings from posts and threads. Hacker News and Mastodon work without any keys.</div>`,
   render: (r) => {
-    const h = S.ui.hid ||= hidDefaults(); const st = Object.entries(r.status || {}); const names = { reddit: "Reddit", hn: "Hacker News", mastodon: "Mastodon", ai: "AI web hunt" };
+    const h = S.ui.hid ||= hidDefaults(); const st = Object.entries(r.status || {}); const names = { hn: "Hacker News", mastodon: "Mastodon", ai: "AI web hunt" };
     return `<div class="card"><div class="row small" style="margin-bottom:8px"><b>${r.jobs.length} hidden opportunities</b><span class="muted">${r.restored ? `from your last hunt (${ago(r.at)}). Hunt again for fresh posts.` : `found just now`}</span><span class="grow"></span><button class="btn small ghost" id="hidClear">Clear</button></div>
       ${st.length ? `<div class="chips" style="margin-bottom:10px">${st.map(([id, s]) => `<span class="chip ${s.ok ? "" : "bad"}" title="${esc(s.error || "")}">${esc(names[id] || id)}: ${s.ok ? s.count : "failed"}</span>`).join("")}</div>` : ""}
       ${st.some(([, s]) => s.error) ? `<p class="small muted">${st.filter(([, s]) => s.error).map(([id, s]) => `${esc(names[id] || id)}: ${esc(s.error)}`).join(" · ")}</p>` : ""}
