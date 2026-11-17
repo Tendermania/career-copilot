@@ -77,7 +77,8 @@ Add keys in **Settings** (or in a `.env` file, see below).
 | Key | What it turns on | Where to get it |
 | --- | --- | --- |
 | Anthropic API key (Claude) | Evaluation, tailoring, resume structuring, cover letters, outreach, referral plans, interview prep, company research, AI web job search | [console.anthropic.com](https://console.anthropic.com/settings/keys) → API keys (add billing credit) |
-| DeepSeek API key (alternative to Claude) | The same AI features **except** company research and AI web job search (DeepSeek's API has no web search) | [platform.deepseek.com](https://platform.deepseek.com/api_keys) → API keys (top up your balance) |
+| DeepSeek API key (alternative to Claude) | The same AI features, including company research and AI web job search, which use the web search below | [platform.deepseek.com](https://platform.deepseek.com/api_keys) → API keys (top up your balance) |
+| Brave Search or Tavily key (optional) | Steadier web search for DeepSeek and other non-Claude AIs. Without one, the app uses DuckDuckGo (no key, best effort) | [brave.com/search/api](https://brave.com/search/api/) or [tavily.com](https://tavily.com) |
 | Adzuna app ID + key | Adzuna (large job aggregator) | [developer.adzuna.com](https://developer.adzuna.com/) → register → create an app |
 | RapidAPI key | JSearch: LinkedIn, Indeed, Glassdoor, ZipRecruiter via Google for Jobs | [rapidapi.com](https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch) → subscribe to JSearch (free plan) → copy `X-RapidAPI-Key` |
 | USAJOBS key + email | US federal jobs | [developer.usajobs.gov](https://developer.usajobs.gov/apirequest/) → request an API key (use the same email in Settings) |
@@ -99,8 +100,9 @@ USAJOBS_EMAIL=you@example.com
 
 **AI provider.** Pick Claude (default) or DeepSeek in Settings → AI provider. With DeepSeek,
 the app uses its JSON mode, checks every answer against the expected format and asks once for a
-fix if something doesn't match. Company check and the AI web search job source need web search,
-so they only work with Claude. The DeepSeek model defaults to `deepseek-v4-flash`; if DeepSeek
+fix if something doesn't match. Company check, the AI web search job source and the AI web hunt need web
+results: Claude searches on its own; with any other AI the app runs the search itself (Settings → Web search
+for DeepSeek and other AIs) and your AI reads the results. The DeepSeek model defaults to `deepseek-v4-flash`; if DeepSeek
 renames its models, change the name in Settings. Per DeepSeek's privacy policy, what you send
 (resume, job text) is processed and stored on servers in China.
 

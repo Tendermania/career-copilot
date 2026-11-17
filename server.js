@@ -12,6 +12,7 @@ import { experienceYears } from "./lib/fit.js";
 import { parseUpload, resumeToDocx, coverLetterToDocx, resumeToText } from "./lib/files.js";
 import { tasks, aiStatus, requireAi } from "./lib/ai.js";
 import { COMPAT, fieldsFor, providerList } from "./lib/providers.js";
+import { SEARCH_PROVIDERS } from "./lib/search.js";
 import { APP_DIR, IS_SEA, embedded } from "./lib/paths.js";
 import { PRESETS, suggestFromText, toFocus } from "./lib/focus.js";
 import { searchHidden, aiToJobs, HIDDEN_SOURCES } from "./lib/hidden.js";
@@ -23,7 +24,7 @@ const PORT = Number(process.env.PORT) || 5317;
 const HOST = process.env.HOST || "127.0.0.1";
 const MAX_BODY = 25 * 1024 * 1024;
 const COMPANY_TTL = 14 * 86400000;
-const SECRET_KEYS = ["anthropicApiKey", ...Object.keys(COMPAT).map((id) => fieldsFor(id).key), "adzunaAppKey", "rapidApiKey", "usajobsKey"];
+const SECRET_KEYS = ["anthropicApiKey", ...Object.keys(COMPAT).map((id) => fieldsFor(id).key), "adzunaAppKey", "rapidApiKey", "usajobsKey", "braveApiKey", "tavilyApiKey"];
 
 // ---------- Seed data ----------
 
@@ -69,7 +70,7 @@ function publicSettings() {
 function saveSettings(incoming = {}) {
   const saved = read("settings", {}) || {};
   const next = { ...saved };
-  const allowed = ["aiProvider", "anthropicApiKey", "model", ...Object.keys(COMPAT).flatMap((id) => Object.values(fieldsFor(id))), "adzunaAppId", "adzunaAppKey", "adzunaCountry", "rapidApiKey", "usajobsKey", "usajobsEmail", "greenhouseBoards", "leverBoards", "ashbyBoards", "useFallbacks"];
+  const allowed = ["aiProvider", "anthropicApiKey", "model", ...Object.keys(COMPAT).flatMap((id) => Object.values(fieldsFor(id))), "adzunaAppId", "adzunaAppKey", "adzunaCountry", "rapidApiKey", "usajobsKey", "usajobsEmail", "searchProvider", "braveApiKey", "tavilyApiKey", "greenhouseBoards", "leverBoards", "ashbyBoards", "useFallbacks"];
   for (const k of allowed) {
     if (!(k in incoming)) continue;
     let v = incoming[k];
@@ -275,6 +276,7 @@ route("GET", /^\/api\/status$/, () => {
     activeResumeId: r.activeId,
     sources: sourcesStatus(),
     agencies: AGENCY_DIRECTORY,
+    searchProviders: Object.entries(SEARCH_PROVIDERS).map(([id, p]) => ({ id, label: p.label, note: p.note, help: p.help || "", keyed: p.keyed, keyField: p.keyField || "" })),
     aiTells: AI_TELLS,
     version: "1.0.0",
   };
@@ -346,7 +348,7 @@ route("POST", /^\/api\/hidden\/search$/, async (req, m, body) => {
   if ((body.sources || []).includes("ai")) {
     const a = aiStatus();
     if (!a.ready) r.status.ai = { ok: false, count: 0, error: "Add an AI key in Settings to use the web hunt." };
-    else if (!a.webSearch) r.status.ai = { ok: false, count: 0, error: `The web hunt searches the live web, which ${a.label}'s API can't do. Switch to Claude in Settings.` };
+    else if (!a.webSearch) r.status.ai = { ok: false, count: 0, error: `The web hunt needs web search. Pick a search provider in Settings.` };
     else {
       try {
         const ai = await tasks.hiddenOpps({ profile, queries, days });

@@ -1497,7 +1497,7 @@ function hiddenHTML() {
       <div class="field"><label>Posted within</label><select name="maxAgeDays">${[7, 14, 30, 60].map((d) => `<option value="${d}" ${+h.maxAgeDays === d ? "selected" : ""}>${d} days</option>`).join("")}</select></div>
     </div>
     <div class="row" style="margin-bottom:6px">${HID_SOURCES.map(([id, n, note]) => `<label class="check" title="${esc(note)}"><input type="checkbox" name="sources" value="${id}" ${h.sources.includes(id) ? "checked" : ""}>${n}</label>`).join("")}
-      <label class="check" title="${web ? "Claude searches the open web for obscure postings: forums, social posts, studio pages, newsletters. Takes 1-2 minutes and uses API credits." : "Needs a Claude API key (other providers can't search the web)."}" style="${web ? "" : "opacity:.55"}"><input type="checkbox" name="sources" value="ai" ${h.sources.includes("ai") && web ? "checked" : ""} ${web ? "" : "disabled"}>✨ AI web hunt <span class="hint">${web ? "(Claude)" : "(needs Claude key)"}</span></label></div>
+      <label class="check" title="${web ? `${S.status.ai?.provider === "claude" ? "Claude" : "Your AI"} searches the open web for obscure postings: forums, social posts, studio pages, newsletters. Takes 1-2 minutes and uses AI credits.` : "Needs an AI key, and for non-Claude AIs a working web search (Settings)."}" style="${web ? "" : "opacity:.55"}"><input type="checkbox" name="sources" value="ai" ${h.sources.includes("ai") && web ? "checked" : ""} ${web ? "" : "disabled"}>✨ AI web hunt <span class="hint">${web ? (S.status.ai?.provider === "claude" ? "(Claude)" : "(AI + web search)") : "(needs setup)"}</span></label></div>
     <div class="row" style="margin-top:12px"><button class="btn primary" type="submit">Hunt for hidden opportunities</button><button class="btn ghost" type="button" id="hidReset">Reset to focus</button></div>
   </form>
   <div style="margin-top:14px">${slotHTML("hidden")}</div>`;
@@ -1641,7 +1641,7 @@ view("companies", "Companies", (main, params) => {
   if (params.get("c")) { S.ui.company = params.get("c"); S.ui.companyRole = params.get("role") || ""; }
   const cached = Object.values(S.companies || {}).sort((a, b) => new Date(b.fetchedAt) - new Date(a.fetchedAt));
   main.innerHTML = `${pageHead("Company check", "Before you apply: ratings from Glassdoor, Indeed and others (with links), how they treat contractors, pay, interview process, recent layoffs or news, and red flags. Claude searches the web; results are cached for 14 days.")}
-  ${S.status.ai?.webSearch === false ? `<div class="notice info" style="margin-bottom:14px"><div class="grow">Company check searches the web, which ${esc(S.status.ai.label)}'s API can't do. Switch the AI provider to Claude in Settings to use it. Earlier results still show below.</div><a class="btn small" href="#/settings">Settings</a></div>` : ""}
+  ${S.status.ai?.webSearch === false ? `<div class="notice info" style="margin-bottom:14px"><div class="grow">Company check needs web search. Pick a search provider (and add its key if it needs one) in Settings. Earlier results still show below.</div><a class="btn small" href="#/settings">Settings</a></div>` : ""}
   <div class="card"><div class="grid cols-3">
     <div class="field"><label>Company</label><input type="text" id="coName" value="${esc(S.ui.company || "")}" placeholder="e.g. Buck, Duolingo"></div>
     <div class="field"><label>Role <span class="hint">optional</span></label><input type="text" id="coRole" value="${esc(S.ui.companyRole || "")}"></div>
@@ -2011,8 +2011,13 @@ view("settings", "Settings", async (main) => {
         ${keyField(`${pv.id}ApiKey`, `${pv.label} API key${pv.custom ? " (optional for local models)" : ""}`, "", pv.help)}
         ${pv.custom ? `<div class="field"><label>Base URL</label><input type="text" name="customBaseUrl" value="${esc(s.customBaseUrl)}" placeholder="http://localhost:11434/v1" style="max-width:420px"></div>` : ""}
         <div class="field"><label>Model</label><input type="text" name="${pv.id}Model" value="${esc(s[`${pv.id}Model`])}" placeholder="${pv.custom ? "e.g. llama3.1" : esc(pv.model)}" style="max-width:320px"><div class="hint">${pv.model ? `Default ${esc(pv.model)}. If the provider renames models, put the new name here.` : "Required. The model name your endpoint serves."}</div></div>
-        <div class="notice info small"><div class="grow">${esc(pv.label)}'s API has no web search, so <b>Company check</b> and the <b>AI web search</b> job source are off while it is selected. Everything else works.${pv.note ? ` ${esc(pv.note)}` : ""}</div></div>
+        <div class="notice info small"><div class="grow">${esc(pv.label)} has no built-in web search, so <b>Company check</b>, the <b>AI web search</b> job source and the <b>AI web hunt</b> use the search provider below, then ${esc(pv.label)} reads the results. They work with no key (DuckDuckGo).${pv.note ? ` ${esc(pv.note)}` : ""}</div></div>
       </div>`).join("")}
+    </div>
+    <div class="card"><h2>Web search for DeepSeek and other AIs <span class="hint">Claude searches on its own and doesn't need this</span></h2>
+      <p class="small muted" style="margin-top:0">Company check, the AI web search source and the AI web hunt need live web results. For any AI other than Claude, the app runs the search itself and your AI reads and summarises what comes back. A cheap model is enough for this.</p>
+      <div class="field"><label for="searchProv">Search provider</label><select name="searchProvider" id="searchProv" style="max-width:360px">${(S.status.searchProviders || []).map((p) => `<option value="${p.id}" ${(s.searchProvider || "duckduckgo") === p.id ? "selected" : ""}>${esc(p.label)}</option>`).join("")}</select></div>
+      ${(S.status.searchProviders || []).map((p) => `<div data-sprov="${p.id}" ${(s.searchProvider || "duckduckgo") === p.id ? "" : "hidden"}>${p.keyed ? keyField(p.keyField, `${p.label} key`, esc(p.note), p.help) : `<div class="hint">${esc(p.note)}</div>`}</div>`).join("")}
     </div>
     <div class="card"><h2>Job search keys <span class="hint">all optional, all free tiers</span></h2>
       <div class="grid cols-2">
@@ -2035,11 +2040,11 @@ view("settings", "Settings", async (main) => {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(form);
-    const body = { aiProvider: fd.get("aiProvider"), model: fd.get("model"), useFallbacks: !!fd.get("useFallbacks"), adzunaAppId: fd.get("adzunaAppId"), adzunaCountry: fd.get("adzunaCountry"), usajobsEmail: fd.get("usajobsEmail"), greenhouseBoards: fd.get("greenhouseBoards"), leverBoards: fd.get("leverBoards"), ashbyBoards: fd.get("ashbyBoards") };
+    const body = { aiProvider: fd.get("aiProvider"), model: fd.get("model"), useFallbacks: !!fd.get("useFallbacks"), adzunaAppId: fd.get("adzunaAppId"), adzunaCountry: fd.get("adzunaCountry"), searchProvider: fd.get("searchProvider") || undefined, usajobsEmail: fd.get("usajobsEmail"), greenhouseBoards: fd.get("greenhouseBoards"), leverBoards: fd.get("leverBoards"), ashbyBoards: fd.get("ashbyBoards") };
     const compat = (S.status.providers || []).filter((pv) => pv.id !== "claude");
     for (const pv of compat) { const m = fd.get(`${pv.id}Model`); if (m !== null) body[`${pv.id}Model`] = m; }
     if (fd.get("customBaseUrl") !== null) body.customBaseUrl = fd.get("customBaseUrl");
-    for (const k of ["anthropicApiKey", ...compat.map((pv) => `${pv.id}ApiKey`), "adzunaAppKey", "rapidApiKey", "usajobsKey"]) if (fd.get(k)) body[k] = fd.get(k);
+    for (const k of ["anthropicApiKey", ...compat.map((pv) => `${pv.id}ApiKey`), "adzunaAppKey", "rapidApiKey", "usajobsKey", "braveApiKey", "tavilyApiKey"]) if (fd.get(k)) body[k] = fd.get(k);
     try {
       await api("PUT", "/api/state/settings", body);
       await refreshStatus();
@@ -2055,6 +2060,7 @@ view("settings", "Settings", async (main) => {
   });
   main.addEventListener("change", (e) => {
     if (e.target.name === "theme") { ls.set("theme", e.target.value); applyTheme(); }
+    if (e.target.name === "searchProvider") $$("[data-sprov]", main).forEach((el) => (el.hidden = el.dataset.sprov !== e.target.value));
     if (e.target.name === "aiProvider") $$("[data-prov]", main).forEach((el) => (el.hidden = el.dataset.prov !== e.target.value));
   });
 });
