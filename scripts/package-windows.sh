@@ -30,6 +30,8 @@ cp -r "$ROOT/server.js" "$ROOT/lib" "$ROOT/public" "$ROOT/package.json" "$ROOT/p
 # Dependencies are pure JavaScript, so a Linux install works on Windows.
 (cd "$OUT/app" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --silent)
 
+cp "$ROOT/public/favicon.ico" "$OUT/Career Copilot icon.ico"
+
 # Windows files need CRLF line endings.
 crlf() { sed 's/$/\r/' > "$1"; }
 

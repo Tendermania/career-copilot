@@ -146,3 +146,12 @@ test("overview ties leads, connections and companies together", () => {
   assert.equal(duo.connectionCount, 0);
   assert.equal(ov.companies.find((c) => c.key === "acme").connectionCount, 1);
 });
+
+test("posting filler is not offered as keywords", async () => {
+  const { topPhrases } = await import("../lib/text.js");
+  const job = "We want a motion designer. Please note this is a freelance role. Please send your reel. You will meet the team. Our best work is motion design for brand campaigns. Brand campaigns and motion design are the core of what we do. Hook viewers fast. Please apply.";
+  const got = topPhrases(job);
+  for (const junk of ["want", "please", "please note", "note", "meet", "best", "hook", "you.", "you. please"]) assert.ok(!got.includes(junk), `${junk} should be filtered`);
+  assert.ok(got.includes("brand campaigns"));
+  assert.ok(got.some((p) => p.includes("motion design")));
+});

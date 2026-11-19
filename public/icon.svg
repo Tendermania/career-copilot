@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4338ca"/>
+      <stop offset="0.55" stop-color="#7c3aed"/>
+      <stop offset="1" stop-color="#db2777"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <!-- a "C" for Career, open to the right -->
+  <path d="M349 163 A130 130 0 1 0 349 349" fill="none" stroke="#fff" stroke-width="46" stroke-linecap="round"/>
+  <!-- an arrow climbing up and to the right: the copilot pointing the way -->
+  <path d="M214 300 L296 218" fill="none" stroke="#fff" stroke-width="36" stroke-linecap="round"/>
+  <path d="M240 214 H296 V270" fill="none" stroke="#fff" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

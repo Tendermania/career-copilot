@@ -581,12 +581,12 @@ const pageHead = (title, sub, actions = "") => `<div class="page-head"><div><h1>
 const STATUSES = ["saved", "applied", "interviewing", "offer", "rejected", "ghosted"];
 const STATUS_LABEL = { saved: "Saved", applied: "Applied", interviewing: "Interviewing", offer: "Offer", rejected: "Rejected", ghosted: "Ghosted" };
 function isFollowUpDue(t) {
-  return t.followUpAt && t.followUpAt <= today() && ["saved", "applied", "interviewing"].includes(t.status);
+  return !t.archived && t.followUpAt && t.followUpAt <= today() && ["saved", "applied", "interviewing"].includes(t.status);
 }
 
 view("dashboard", "Dashboard", (main) => {
   const p = S.profile, f = activeFocus();
-  const items = S.tracker.items;
+  const items = S.tracker.items.filter((t) => !t.archived);
   const due = items.filter(isFollowUpDue);
   const counts = Object.fromEntries(STATUSES.map((s) => [s, items.filter((t) => t.status === s).length]));
   const last = S.ui.lastSearch;
@@ -907,8 +907,34 @@ function atsCompactHTML(rep) {
   const k = rep.keyword;
   return `<div class="row" style="align-items:flex-start;flex-wrap:nowrap">${scoreRing(rep.overall)}<div class="grow">
     <b>ATS score ${rep.overall}/100</b><div class="small muted">${k ? `Keyword match ${k.score}% · ` : ""}${rep.issues.filter((i) => i.severity === "high").length} high-priority issue(s)</div>
-    ${k ? `<div class="chips" style="margin-top:8px">${k.matched.slice(0, 12).map((x) => `<span class="chip good">${esc(x)}</span>`).join("")}${k.missing.slice(0, 12).map((x) => `<span class="chip bad">${esc(x)}</span>`).join("")}</div>` : `<div class="small muted" style="margin-top:6px">Add a job description for keyword matching.</div>`}
+    ${k ? `<div class="chips" style="margin-top:8px">${(k.details || []).filter((d) => d.kind !== "phrase").sort((a, b) => a.found - b.found).slice(0, 14).map(termChip).join("")}</div><div class="small muted" style="margin-top:4px">Red = a tool or skill from the posting that isn't on your resume.</div>` : `<div class="small muted" style="margin-top:6px">Add a job description for keyword matching.</div>`}
     <a class="small" href="#/ats">Full ATS report →</a></div></div>`;
+}
+
+const KIND_LABEL = { skill: "Tool / skill", keyword: "Key term (AI-picked)", phrase: "Wording from the posting" };
+function termChip(d) {
+  const tip = d.found ? `Found on your resume: “${d.quote}”${d.reworded ? " (worded differently)" : ""}` : `${KIND_LABEL[d.kind]}. The posting mentions it ${d.mentions || 1} time${d.mentions === 1 ? "" : "s"}; it isn't on your resume.`;
+  return `<span class="chip ${d.found ? "good" : "bad"}" title="${esc(tip)}">${esc(d.term)}${d.mentions > 1 ? `<span class="n">×${d.mentions}</span>` : ""}</span>`;
+}
+
+function keywordCardHTML(k) {
+  const det = k.details || [...k.matched.map((term) => ({ term, kind: "phrase", found: true })), ...k.missing.map((term) => ({ term, kind: "phrase", found: false }))];
+  const by = (kinds, found) => det.filter((d) => kinds.includes(d.kind) && d.found === found).sort((a, b) => (b.mentions || 0) - (a.mentions || 0));
+  const hard = ["skill", "keyword"];
+  const missHard = by(hard, false), haveHard = by(hard, true), missWords = by(["phrase"], false), haveWords = by(["phrase"], true);
+  const chips = (arr, none) => (arr.length ? `<div class="chips">${arr.map(termChip).join("")}</div>` : `<p class="muted small" style="margin:0">${none}</p>`);
+  return `<div class="card" style="margin-top:14px"><h2>How your resume matches this job</h2>
+    <p class="small muted" style="margin-top:0">Applicant tracking systems and recruiters search for the exact words a posting uses. <span class="chip good">Green</span> = found on your resume. <span class="chip bad">Red</span> = not found. <span class="n-demo">×3</span> = how many times the posting uses it. Hover a chip for details. “Not found” only means that wording is missing, not that you lack the skill.</p>
+    <div class="stack">
+      <div><h4>Tools & skills the job asks for</h4>
+        <p class="small" style="margin:0 0 6px"><b>Not on your resume (${missHard.length})</b> <span class="muted">· these matter most. Add the ones that are true for you.</span></p>${chips(missHard, "Nothing missing. Every tool and skill the posting lists is on your resume.")}
+        <p class="small" style="margin:12px 0 6px"><b>Already on your resume (${haveHard.length})</b></p>${chips(haveHard, "None found.")}</div>
+      <div><h4>Other wording from the posting</h4>
+        <p class="small" style="margin:0 0 6px"><b>Not on your resume (${missWords.length})</b> <span class="muted">· phrases the posting repeats. Lower priority; use them only where natural.</span></p>${chips(missWords, "Nothing missing.")}
+        <p class="small" style="margin:12px 0 6px"><b>Already on your resume (${haveWords.length})</b></p>${chips(haveWords, "None found.")}</div>
+    </div>
+    ${k.reworded?.length ? `<p class="small" style="margin-top:12px"><b>Counted, but worded differently on your resume:</b> ${k.reworded.map((x) => `${esc(x)} <span class="muted">(“${esc(k.evidence[x]?.quote || "")}”)</span>`).join(" · ")}. Matching the posting's wording helps literal keyword searches.</p>` : ""}
+    <p class="small" style="margin-top:10px">${k.requiredYears ? `Job asks for <b>${k.requiredYears}+ years</b>; your dates span about <b>${k.estimatedYears ?? "?"}</b>. ` : ""}${k.titleMatch ? "The job title appears on your resume." : k.titleEvidence?.level === "partial" ? `Your resume shows “${esc(k.titleEvidence.phrase)}” but not the full job title.` : k.titleMatch === false ? "The job title isn't on your resume." : ""}</p></div>`;
 }
 
 function atsReportHTML(rep) {
@@ -923,11 +949,7 @@ function atsReportHTML(rep) {
       ${Object.entries(rep.headings).map(([h, v]) => `<div>“${h[0].toUpperCase() + h.slice(1)}” heading</div><div>${yes(v)}</div>`).join("")}</div>
       <p class="small muted" style="margin-top:10px">${rep.stats.words} words · ${rep.stats.bullets} bullets · ${rep.stats.quantified} with numbers · ${rep.stats.actionStart} start with an action verb</p></div>
   </div>
-  ${k ? `<div class="card" style="margin-top:14px"><h2>Keywords from the job</h2>
-    <div class="grid cols-2"><div><h4>In your resume (${k.matched.length})</h4><div class="chips">${k.matched.map((x) => `<span class="chip good">${esc(x)}</span>`).join("") || '<span class="muted small">None</span>'}</div></div>
-    <div><h4>Missing (${k.missing.length})</h4><div class="chips">${k.missing.map((x) => `<span class="chip bad">${esc(x)}</span>`).join("") || '<span class="muted small">None</span>'}</div><p class="small muted" style="margin-top:6px">“Missing” means this wording wasn't found, not that you lack the skill. Only add the ones that are true for you.</p></div></div>
-    ${k.reworded?.length ? `<p class="small" style="margin-top:10px"><b>Counted, but worded differently on your resume:</b> ${k.reworded.map((x) => `${esc(x)} <span class="muted">(“${esc(k.evidence[x]?.quote || "")}”)</span>`).join(" · ")}. Matching the posting's wording helps literal keyword searches.</p>` : ""}
-    <p class="small" style="margin-top:10px">${k.requiredYears ? `Job asks for <b>${k.requiredYears}+ years</b>; your dates span about <b>${k.estimatedYears ?? "?"}</b>. ` : ""}${k.titleMatch ? "The job title appears on your resume." : k.titleEvidence?.level === "partial" ? `Your resume shows “${esc(k.titleEvidence.phrase)}” but not the full job title.` : k.titleMatch === false ? "The job title isn't on your resume." : ""}</p></div>` : ""}
+  ${k ? keywordCardHTML(k) : ""}
   <div class="card" style="margin-top:14px"><h2>Issues to fix (${rep.issues.length})</h2>
     ${rep.issues.length ? `<ul class="list">${rep.issues.map((i) => `<li class="issue">${sevBadge(i.severity)}<div><b>${esc(i.area)}:</b> ${esc(i.message)}</div><div class="fix">${esc(i.fix)}</div></li>`).join("")}</ul>` : `<p class="muted">No issues found.</p>`}</div>
   <div class="grid cols-2" style="margin-top:14px">
@@ -2276,7 +2298,7 @@ function editApplication(t = null) {
     ${peopleAtHTML(t.company)}
     <details><summary class="small" style="cursor:pointer">Job description</summary><textarea name="description" class="tall" style="margin-top:6px">${esc(t.description)}</textarea></details>
     ${t.history?.length ? `<p class="small muted" style="margin-top:10px">History: ${t.history.map((h) => `${STATUS_LABEL[h.status]} ${fmtDate(h.at)}`).join(" → ")}</p>` : ""}
-  </div><div class="dlg-foot">${isNew ? "" : `<button type="button" class="btn ghost danger" data-delete>Delete</button><button type="button" class="btn ghost" data-use>Use this job in tools</button>`}<span class="grow"></span><button type="button" class="btn" data-close>Cancel</button><button class="btn primary" value="save">Save</button></div></form>`, {
+  </div><div class="dlg-foot">${isNew ? "" : `<button type="button" class="btn ghost danger" data-delete>Delete</button><button type="button" class="btn ghost" data-archive>${t.archived ? "Restore" : "Archive"}</button><button type="button" class="btn ghost" data-use>Use this job in tools</button>`}<span class="grow"></span><button type="button" class="btn" data-close>Cancel</button><button class="btn primary" value="save">Save</button></div></form>`, {
     onOpen: (dlg) => {
       const f = $("form", dlg);
       $("[data-plus]", dlg).addEventListener("click", () => (f.followUpAt.value = addDays(7)));
@@ -2292,11 +2314,13 @@ function editApplication(t = null) {
         dlg.close();
         rerender();
       });
+      $("[data-archive]", dlg)?.addEventListener("click", () => { archiveApp(t.id, !t.archived); dlg.close(); });
       $("[data-use]", dlg)?.addEventListener("click", () => { setWorkingJob({ title: f.role.value, company: f.company.value, url: f.url.value, description: f.description.value, type: f.type.value, salary: f.salary.value }); dlg.close(); toast("Loaded into Evaluate, Cover Letters, Networking and Interview Prep"); });
       f.addEventListener("submit", () => {
         const fd = Object.fromEntries(new FormData(f));
         if (fd.status !== t.status || isNew) (t.history ||= []).push({ status: fd.status, at: new Date().toISOString() });
         Object.assign(t, fd);
+        if (t.archived) t.archived = true;
         const i = S.tracker.items.findIndex((x) => x.id === t.id);
         if (i >= 0) S.tracker.items[i] = t;
         else S.tracker.items.unshift(t);
@@ -2309,31 +2333,94 @@ function editApplication(t = null) {
   return d;
 }
 
+const monthOf = (t) => String(t.appliedAt || t.savedAt || (t.history?.[0]?.at || "").slice(0, 10) || "").slice(0, 7);
+const monthLabel = (m) => (m ? new Date(`${m}-15T12:00:00`).toLocaleDateString(undefined, { month: "long", year: "numeric" }) : "No date");
+const DONE_STATUSES = ["rejected", "ghosted"];
+
+function archiveApp(id, on = true) {
+  const t = S.tracker.items.find((x) => x.id === id);
+  if (!t) return;
+  t.archived = on;
+  if (on) t.archivedAt = new Date().toISOString(); else delete t.archivedAt;
+  save("tracker");
+  S.net = null;
+  toast(on ? "Archived. Find it under Show → Archived." : "Restored");
+  renderNav();
+  rerender();
+}
+
+function deleteApp(id) {
+  const t = S.tracker.items.find((x) => x.id === id);
+  if (!t || !confirm(`Delete “${t.role}” at ${t.company}? This can't be undone. (Archive keeps it but hides it.)`)) return;
+  S.tracker.items = S.tracker.items.filter((x) => x.id !== id);
+  save("tracker");
+  S.net = null;
+  toast("Deleted");
+  renderNav();
+  rerender();
+}
+
 view("tracker", "Tracker", (main) => {
-  const allItems = S.tracker.items;
+  const all = S.tracker.items;
+  const show = S.ui.trackerShow || "active";
+  const month = S.ui.trackerMonth || "";
   const tq = (S.ui.trackerSearch || "").toLowerCase();
-  const items = tq ? allItems.filter((t) => `${t.role} ${t.company} ${t.notes} ${t.contacts} ${t.location}`.toLowerCase().includes(tq)) : allItems;
-  const due = allItems.filter(isFollowUpDue);
   const mode = S.ui.trackerMode || "board";
-  const sent = allItems.filter((t) => t.appliedAt || ["applied", "interviewing", "offer", "rejected", "ghosted"].includes(t.status));
+  const inShow = (t) => (show === "all" ? true : show === "archived" ? !!t.archived : !t.archived);
+  const shown = all.filter(inShow);
+  const months = [...new Set(shown.map(monthOf))].sort().reverse();
+  const scoped = shown.filter((t) => !month || monthOf(t) === month);
+  const items = tq ? scoped.filter((t) => `${t.role} ${t.company} ${t.notes} ${t.contacts} ${t.location}`.toLowerCase().includes(tq)) : scoped;
+  const due = all.filter(isFollowUpDue);
+  const sent = scoped.filter((t) => t.appliedAt || ["applied", "interviewing", "offer", "rejected", "ghosted"].includes(t.status));
   const weekAgo = addDays(-7);
   const heard = sent.filter((t) => ["interviewing", "offer", "rejected"].includes(t.status)).length;
   const leadCount = (t) => leadsAt(t.company).length;
-  main.innerHTML = `${pageHead("Applications", "Every job you've applied to, from saved through offer. Keep dates, contacts, and which resume and letter you used.", `<button class="btn" id="csvBtn">Export CSV</button><button class="btn primary" id="addApp">+ Add</button>`)}
+  const doneCount = all.filter((t) => !t.archived && DONE_STATUSES.includes(t.status)).length;
+  const scopeLabel = month ? monthLabel(month) : show === "archived" ? "archived" : "total";
+  const acts = (t) => `<span class="tact"><button class="link" data-tact="archive" data-id="${esc(t.id)}">${t.archived ? "Restore" : "Archive"}</button><button class="link danger" data-tact="delete" data-id="${esc(t.id)}">Delete</button></span>`;
+  const card = (t) => `<div class="app-card ${t.archived ? "dim" : ""}" data-app="${esc(t.id)}" tabindex="0" role="button"><b>${esc(t.role)}</b><div class="muted">${esc(t.company)}</div>${leadCount(t) ? `<div class="small"><span class="badge accent">${leadCount(t)} lead${leadCount(t) > 1 ? "s" : ""} here</span></div>` : ""}
+      ${t.appliedAt ? `<div class="small faint">Applied ${fmtDate(t.appliedAt)}</div>` : ""}${isFollowUpDue(t) ? `<div class="due">Follow up due</div>` : t.followUpAt && !t.archived && ["applied", "interviewing", "saved"].includes(t.status) ? `<div class="small faint">Follow up ${fmtDate(t.followUpAt)}</div>` : ""}${acts(t)}</div>`;
+  const rows = (list) => list.map((t) => `<tr data-app="${esc(t.id)}" class="${t.archived ? "dim" : ""}" style="cursor:pointer"><td><b>${esc(t.role)}</b></td><td>${esc(t.company)}</td><td>${STATUS_LABEL[t.status]}${t.archived ? ' <span class="badge">archived</span>' : ""}</td><td>${fmtDate(t.appliedAt)}</td><td ${isFollowUpDue(t) ? 'style="color:var(--bad);font-weight:600"' : ""}>${t.archived ? "" : fmtDate(t.followUpAt)}</td><td>${esc(t.type)}</td><td>${leadCount(t) || ""}</td><td class="small">${esc(resumeById(t.resumeId)?.name || "")}</td><td>${acts(t)}</td></tr>`).join("");
+  const head = `<thead><tr><th>Role</th><th>Company</th><th>Status</th><th>Applied</th><th>Follow up</th><th>Type</th><th>Leads</th><th>Resume</th><th></th></tr></thead>`;
+
+  let body;
+  if (!all.length) body = `<div class="card empty">No applications yet. Add one, or press “I applied” or “Track” on any job.</div>`;
+  else if (!items.length) body = `<div class="card empty">${tq ? `No applications match “${esc(S.ui.trackerSearch)}”.` : show === "archived" ? "Nothing archived yet. Archive an application to tuck it away without deleting it." : "Nothing here for this month."}</div>`;
+  else if (mode === "month") {
+    const groups = [...new Set(items.map(monthOf))].sort().reverse();
+    body = groups.map((m) => {
+      const g = items.filter((t) => monthOf(t) === m).sort((a, b) => String(b.appliedAt || b.savedAt || "").localeCompare(String(a.appliedAt || a.savedAt || "")));
+      const n = (st) => g.filter((t) => t.status === st).length;
+      const applied = g.filter((t) => t.appliedAt || t.status !== "saved").length;
+      const chips = [[applied, "applied"], [n("interviewing"), "interviewing"], [n("offer"), "offer"], [n("rejected"), "rejected"], [n("ghosted"), "no reply"], [n("saved"), "just saved"]].filter(([c]) => c);
+      return `<div class="card" style="margin-bottom:14px"><div class="card-head"><h2>${esc(monthLabel(m))}</h2><span class="spacer"></span><span class="muted small">${g.length} job${g.length === 1 ? "" : "s"}</span></div>
+        <div class="chips" style="margin-bottom:10px">${chips.map(([c, l]) => `<span class="chip">${c} ${l}</span>`).join("")}</div>
+        <div class="table-wrap"><table>${head}<tbody>${rows(g)}</tbody></table></div></div>`;
+    }).join("");
+  } else if (mode === "board") body = `<div class="kanban">${STATUSES.map((st) => {
+    const its = items.filter((t) => t.status === st);
+    return `<div class="lane"><h4><span>${STATUS_LABEL[st]}</span><span>${its.length}</span></h4>${its.map(card).join("")}</div>`;
+  }).join("")}</div>`;
+  else body = `<div class="card table-wrap"><table>${head}<tbody>${rows(items)}</tbody></table></div>`;
+
+  main.innerHTML = `${pageHead("Applications", "Every job you've applied to, from saved through offer. Archive what's finished, or view it month by month.", `<button class="btn" id="csvBtn">Export CSV</button><button class="btn primary" id="addApp">+ Add</button>`)}
   ${due.length ? `<div class="notice warn" style="margin-bottom:14px"><div class="grow"><b>${due.length} follow-up${due.length > 1 ? "s" : ""} due:</b> ${due.map((t) => esc(`${t.role} @ ${t.company}`)).join(", ")}. A short, friendly check-in is normal about a week after applying.</div></div>` : ""}
   <div class="grid cols-4" style="margin-bottom:14px">
-    <div class="card"><div class="stat">${sent.length}</div><div class="stat-label">Applied in total</div></div>
+    <div class="card"><div class="stat">${sent.length}</div><div class="stat-label">Applied (${esc(scopeLabel)})</div></div>
     <div class="card"><div class="stat">${sent.filter((t) => t.appliedAt && t.appliedAt >= weekAgo).length}</div><div class="stat-label">Applied in the last 7 days</div></div>
     <div class="card"><div class="stat">${sent.filter((t) => t.status === "applied").length}</div><div class="stat-label">Waiting to hear back</div></div>
     <div class="card"><div class="stat">${sent.length ? `${Math.round((heard / sent.length) * 100)}%` : "—"}</div><div class="stat-label">Heard back (${heard} of ${sent.length})</div></div>
   </div>
-  <div class="row" style="margin-bottom:6px"><div class="tabs grow" role="tablist" style="margin-bottom:0"><button role="tab" aria-selected="${mode === "board"}" data-tm="board">Board</button><button role="tab" aria-selected="${mode === "table"}" data-tm="table">Table</button></div><input type="search" id="trackerSearch" placeholder="Search applications…" value="${esc(S.ui.trackerSearch || "")}" style="max-width:240px"></div>
-  ${!allItems.length ? `<div class="card empty">No applications yet. Add one, or press “I applied” or “Track” on any job.</div>` : !items.length ? `<div class="card empty">No applications match “${esc(S.ui.trackerSearch)}”.</div>` : mode === "board" ? `<div class="kanban">${STATUSES.map((s) => {
-    const its = items.filter((t) => t.status === s);
-    return `<div class="lane"><h4><span>${STATUS_LABEL[s]}</span><span>${its.length}</span></h4>${its.map((t) => `<div class="app-card" data-app="${esc(t.id)}" tabindex="0" role="button"><b>${esc(t.role)}</b><div class="muted">${esc(t.company)}</div>${leadCount(t) ? `<div class="small"><span class="badge accent">${leadCount(t)} lead${leadCount(t) > 1 ? "s" : ""} here</span></div>` : ""}
-      ${t.appliedAt ? `<div class="small faint">Applied ${fmtDate(t.appliedAt)}</div>` : ""}${isFollowUpDue(t) ? `<div class="due">Follow up due</div>` : t.followUpAt && ["applied", "interviewing", "saved"].includes(t.status) ? `<div class="small faint">Follow up ${fmtDate(t.followUpAt)}</div>` : ""}</div>`).join("")}</div>`;
-  }).join("")}</div>` : `<div class="card table-wrap"><table><thead><tr><th>Role</th><th>Company</th><th>Status</th><th>Applied</th><th>Follow up</th><th>Type</th><th>Leads</th><th>Resume</th></tr></thead><tbody>
-    ${items.map((t) => `<tr data-app="${esc(t.id)}" style="cursor:pointer"><td><b>${esc(t.role)}</b></td><td>${esc(t.company)}</td><td>${STATUS_LABEL[t.status]}</td><td>${fmtDate(t.appliedAt)}</td><td ${isFollowUpDue(t) ? 'style="color:var(--bad);font-weight:600"' : ""}>${fmtDate(t.followUpAt)}</td><td>${esc(t.type)}</td><td>${leadCount(t) || ""}</td><td class="small">${esc(resumeById(t.resumeId)?.name || "")}</td></tr>`).join("")}</tbody></table></div>`}`;
+  <div class="row" style="margin-bottom:10px">
+    <div class="tabs grow" role="tablist" style="margin-bottom:0"><button role="tab" aria-selected="${mode === "board"}" data-tm="board">Board</button><button role="tab" aria-selected="${mode === "table"}" data-tm="table">Table</button><button role="tab" aria-selected="${mode === "month"}" data-tm="month">By month</button></div>
+    <select id="trShow" class="mini" aria-label="Show"><option value="active" ${show === "active" ? "selected" : ""}>Active</option><option value="archived" ${show === "archived" ? "selected" : ""}>Archived (${all.filter((t) => t.archived).length})</option><option value="all" ${show === "all" ? "selected" : ""}>Everything</option></select>
+    <select id="trMonth" class="mini" aria-label="Month"><option value="">All months</option>${months.map((m) => `<option value="${m}" ${m === month ? "selected" : ""}>${esc(monthLabel(m))} (${shown.filter((t) => monthOf(t) === m).length})</option>`).join("")}</select>
+    <input type="search" id="trackerSearch" placeholder="Search applications…" value="${esc(S.ui.trackerSearch || "")}" style="max-width:220px">
+    ${doneCount && show !== "archived" ? `<button class="btn small" id="archiveDone" title="Archive every application marked Rejected or Ghosted">Archive ${doneCount} rejected / no reply</button>` : ""}
+  </div>
+  ${body}`;
+
   $("#addApp").addEventListener("click", () => editApplication());
   $("#trackerSearch")?.addEventListener("input", debounce((e) => {
     S.ui.trackerSearch = e.target.value;
@@ -2341,13 +2428,29 @@ view("tracker", "Tracker", (main) => {
     const el = $("#trackerSearch");
     if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
   }, 250));
+  $("#trShow").addEventListener("change", (e) => { S.ui.trackerShow = e.target.value; S.ui.trackerMonth = ""; rerender(); });
+  $("#trMonth").addEventListener("change", (e) => { S.ui.trackerMonth = e.target.value; rerender(); });
+  $("#archiveDone")?.addEventListener("click", () => {
+    const list = all.filter((t) => !t.archived && DONE_STATUSES.includes(t.status));
+    if (!confirm(`Archive ${list.length} rejected / no-reply application${list.length > 1 ? "s" : ""}? You can restore them from Show → Archived.`)) return;
+    for (const t of list) { t.archived = true; t.archivedAt = new Date().toISOString(); }
+    save("tracker");
+    S.net = null;
+    renderNav();
+    rerender();
+  });
   $$("[data-tm]", main).forEach((b) => b.addEventListener("click", () => { S.ui.trackerMode = b.dataset.tm; rerender(); }));
-  main.addEventListener("click", (e) => { const a = e.target.closest("[data-app]"); if (a) editApplication(S.tracker.items.find((x) => x.id === a.dataset.app)); });
-  main.addEventListener("keydown", (e) => { const a = e.target.closest("[data-app]"); if (a && e.key === "Enter") editApplication(S.tracker.items.find((x) => x.id === a.dataset.app)); });
+  main.addEventListener("click", (e) => {
+    const act = e.target.closest("[data-tact]");
+    if (act) { e.stopPropagation(); return act.dataset.tact === "delete" ? deleteApp(act.dataset.id) : archiveApp(act.dataset.id, !all.find((x) => x.id === act.dataset.id)?.archived); }
+    const a = e.target.closest("[data-app]");
+    if (a) editApplication(S.tracker.items.find((x) => x.id === a.dataset.app));
+  });
+  main.addEventListener("keydown", (e) => { const a = e.target.closest("[data-app]"); if (a && e.key === "Enter" && e.target === a) editApplication(S.tracker.items.find((x) => x.id === a.dataset.app)); });
   $("#csvBtn").addEventListener("click", () => {
-    const cols = ["company", "role", "status", "type", "salary", "appliedAt", "followUpAt", "url", "contacts", "notes"];
+    const cols = ["company", "role", "status", "month", "type", "salary", "appliedAt", "followUpAt", "archived", "url", "contacts", "notes"];
     const q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    download(`applications-${today()}.csv`, [cols.join(","), ...allItems.map((t) => cols.map((c) => q(t[c])).join(","))].join("\n"), "text/csv");
+    download(`applications-${today()}.csv`, [cols.join(","), ...all.map((t) => cols.map((c) => q(c === "month" ? monthOf(t) : c === "archived" ? (t.archived ? "yes" : "") : t[c])).join(","))].join("\n"), "text/csv");
   });
 });
 

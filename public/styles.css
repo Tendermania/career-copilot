@@ -67,8 +67,7 @@ small, .small { font-size: .85rem; }
 /* ---------- Layout ---------- */
 .topbar { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 16px; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--border); }
 .brand { white-space: nowrap; display: flex; align-items: center; gap: 9px; font-weight: 700; letter-spacing: -.01em; }
-.logo { width: 24px; height: 24px; border-radius: 7px; background: var(--accent); position: relative; }
-.logo::after { content: ""; position: absolute; inset: 7px 5px 6px; border: 2.5px solid var(--accent-ink); border-bottom: 0; border-radius: 10px 10px 0 0; }
+.logo { width: 26px; height: 26px; border-radius: 7px; display: block; }
 .topbar-right { margin-left: auto; min-width: 0; display: flex; align-items: center; gap: 8px; }
 .focus-wrap { margin: 0; min-width: 0; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
@@ -337,3 +336,11 @@ ol.steps li + li { margin-top: 6px; }
 .co h3 { margin: 0; }
 .conn .row > .row { flex: none; }
 @media (max-width: 640px) { .conn > .row { flex-wrap: wrap !important; } .rates { order: -1; } }
+.chip .n { opacity: .7; margin-left: 5px; font-size: .75rem; }
+.n-demo { font-size: .8rem; opacity: .7; }
+.app-card.dim, tr.dim { opacity: .6; }
+.tact { display: flex; gap: 10px; margin-top: 6px; }
+button.link { border: 0; background: none; padding: 0; font-size: .78rem; color: var(--muted); cursor: pointer; text-decoration: underline; }
+button.link:hover { color: var(--accent); }
+button.link.danger:hover { color: var(--bad); }
+td .tact { margin: 0; white-space: nowrap; }

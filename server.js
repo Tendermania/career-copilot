@@ -270,7 +270,7 @@ function networkInputs(body = {}) {
     profile,
     focus: activeFocus(profile),
     skills: sp.skills,
-    tracker: (read("tracker", { items: [] }) || {}).items || [],
+    tracker: ((read("tracker", { items: [] }) || {}).items || []).filter((t) => !t.archived),
     savedJobs: (read("saved-jobs", { items: [] }) || {}).items || [],
     workingJob: body.job?.company ? body.job : null,
     leadsStore: read("leads", { items: [] }) || { items: [] },

@@ -1,0 +1,13 @@
+{
+  "name": "Career Copilot",
+  "short_name": "Career Copilot",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#5b3df0",
+  "theme_color": "#5b3df0",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
