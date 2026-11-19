@@ -64,6 +64,15 @@ Designer, Animator, 2D/3D Motion Designer, Video Editor; After Effects, Cinema 4
 Lottie, Illustrator, Photoshop, Premiere Pro). Edit it or add more focuses for other fields,
 then switch focus from the top bar.
 
+## One-file Windows app
+
+`scripts/build-exe.sh` builds `dist/CareerCopilot.exe`: a single file with the app, its UI and
+its own Node runtime inside. Double-click it and the browser opens. Your data is saved in a
+`data` folder next to the .exe, so keep the .exe in its own folder (for example on your
+Desktop in a folder called Career Copilot). The older `scripts/package-windows.sh` builds a
+zip with a folder instead. Windows will say "Windows protected your PC" the first time
+because the file isn't signed: click More info, then Run anyway.
+
 ## Keys
 
 Without any keys you get the ATS checker, all free job sources, saved jobs and the tracker.

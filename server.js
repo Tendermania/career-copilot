@@ -4,7 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import { loadDotEnv, read, write, isAllowedKey, settings, DEFAULT_BOARDS } from "./lib/store.js";
+import { getAsset } from "node:sea";
+import { loadDotEnv, read, write, isAllowedKey, settings, DEFAULT_BOARDS, IS_SEA } from "./lib/store.js";
 import { analyze } from "./lib/ats.js";
 import { findAiTells, findSkills, norm, AI_TELLS } from "./lib/text.js";
 import { parseConnections, overview, buildContext, matchCompany, rankConnections, leadQuality, RELATIONSHIPS, LEAD_STATUSES } from "./lib/network.js";
@@ -534,15 +535,26 @@ route("POST", /^\/api\/export\/docx$/, async (req, m, body) => {
 
 const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon", ".json": "application/json", ".webmanifest": "application/manifest+json" };
 
+// The UI files are read from disk, or from inside the .exe when running as one.
+function readPublic(rel, cb) {
+  if (!IS_SEA) return fs.readFile(path.join(PUBLIC, rel), cb);
+  try {
+    cb(null, Buffer.from(getAsset(`public/${rel}`)));
+  } catch (e) {
+    cb(e);
+  }
+}
+
 function serveStatic(req, res, pathname) {
   let p = decodeURIComponent(pathname);
   if (p === "/") p = "/index.html";
   const file = path.normalize(path.join(PUBLIC, p));
   if (!file.startsWith(PUBLIC + path.sep)) return send(res, 403, "Forbidden");
-  fs.readFile(file, (err, data) => {
+  const rel = path.relative(PUBLIC, file).split(path.sep).join("/");
+  readPublic(rel, (err, data) => {
     if (err) {
       // Unknown non-asset paths fall back to the app shell.
-      if (!path.extname(p)) return fs.readFile(path.join(PUBLIC, "index.html"), (e2, html) => (e2 ? send(res, 404, "Not found") : send(res, 200, html, { "Content-Type": MIME[".html"] })));
+      if (!path.extname(p)) return readPublic("index.html", (e2, html) => (e2 ? send(res, 404, "Not found") : send(res, 200, html, { "Content-Type": MIME[".html"] })));
       return send(res, 404, "Not found");
     }
     send(res, 200, data, { "Content-Type": MIME[path.extname(file)] || "application/octet-stream", "Cache-Control": "no-cache" });
@@ -584,10 +596,12 @@ server.requestTimeout = 15 * 60 * 1000;
 server.headersTimeout = 60 * 1000;
 // The portable launcher sets OPEN_BROWSER=1 so a double-click opens the app.
 function openBrowser(url) {
-  if (process.env.OPEN_BROWSER !== "1") return;
+  if (process.env.OPEN_BROWSER !== "1" && !IS_SEA) return;
   const [cmd, args] = process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : process.platform === "darwin" ? ["open", [url]] : ["xdg-open", [url]];
   try {
-    spawn(cmd, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    const child = spawn(cmd, args, { detached: true, stdio: "ignore", windowsHide: true });
+    child.on("error", () => {}); // no browser opener available; the URL is printed anyway
+    child.unref();
   } catch {
     // Opening the browser is a convenience; the URL is printed either way.
   }
